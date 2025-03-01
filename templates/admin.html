@@ -1,28 +1,43 @@
 <!DOCTYPE html>
 <html lang="cs">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Administrace SOFIM</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-    <title>SOFIM Administrace</title>
 </head>
 <body>
     <div class="container">
         <h1>Administrace - Správa Dat</h1>
 
         <form method="post">
-            <textarea name="text" placeholder="Vložte nový text..." required></textarea>
+            <label for="title">Název záznamu:</label>
+            <input type="text" id="title" name="title" required>
+
+            <label for="text">Text:</label>
+            <textarea id="text" name="text" rows="5" required></textarea>
+
             <button type="submit">Přidat</button>
         </form>
 
-        {% if error %}
-            <p style="color: red;">{{ error }}</p>
-        {% endif %}
-
-        <h2>Uložené texty</h2>
-        <ul>
-            {% for chunk in embeddings %}
-                <li>{{ chunk[0][:100] }}...</li>
+        <h2>Uložené záznamy</h2>
+        <table>
+            <tr>
+                <th>Název</th>
+                <th>Akce</th>
+            </tr>
+            {% for record in embeddings %}
+            <tr>
+                <td>{{ record[1] }}</td>
+                <td>
+                    <a href="{{ url_for('edit_record', record_id=record[0]) }}">Upravit</a> |
+                    <form action="{{ url_for('delete_record', record_id=record[0]) }}" method="post" style="display:inline;">
+                        <button type="submit" onclick="return confirm('Opravdu chcete smazat tento záznam?')">Smazat</button>
+                    </form>
+                </td>
+            </tr>
             {% endfor %}
-        </ul>
+        </table>
     </div>
 </body>
 </html>
