@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <title>SOFIM Administrace</title>
+</head>
+<body>
+    <div class="container">
+        <h1>Administrace - Správa Dat</h1>
+
+        <form method="post">
+            <textarea name="text" placeholder="Vložte nový text..." required></textarea>
+            <button type="submit">Přidat</button>
+        </form>
+
+        {% if error %}
+            <p style="color: red;">{{ error }}</p>
+        {% endif %}
+
+        <h2>Uložené texty</h2>
+        <ul>
+            {% for chunk in embeddings %}
+                <li>{{ chunk[0][:100] }}...</li>
+            {% endfor %}
+        </ul>
+    </div>
+</body>
+</html>

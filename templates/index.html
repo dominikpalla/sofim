@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOFIM - Interaktivní dotazovací nástroj</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- Logo fakulty -->
+        <div class="header">
+            <img src="{{ url_for('static', filename='fim_logo.png') }}" alt="FIM UHK" class="logo">
+            <h1>Studijní asistent SOFIM</h1>
+        </div>
+
+        <!-- Formulář pro dotaz -->
+        <form method="post" onsubmit="showLoading()">
+            <label for="query">Zadejte svůj dotaz:</label>
+            <input type="text" id="query" name="query" placeholder="Např. Jaké jsou podmínky pro státnice?" required>
+            <button type="submit">Získat odpověď</button>
+        </form>
+
+        <!-- Načítací animace -->
+        <div id="loading-spinner" class="spinner"></div>
+
+        <!-- Výstup odpovědi -->
+        {% if response %}
+            <div class="output-box">
+                <h2>Váš dotaz:</h2>
+                <p class="user-query">{{ query }}</p>
+
+                <h2>Odpověď SOFIM:</h2>
+                <p class="bot-response">{{ response }}</p>
+            </div>
+        {% endif %}
+    </div>
+
+    <script>
+        function showLoading() {
+            document.getElementById("loading-spinner").style.display = "block";
+        }
+    </script>
+</body>
+</html>
