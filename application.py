@@ -11,6 +11,7 @@ from config import OPENAI_API_KEY, EMBEDDING_MODEL, OPENAI_API_URL, LLM_API_URL
 app = Flask(__name__)
 
 
+
 # Získání embeddingu pro dotaz
 def get_query_embedding(query):
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
