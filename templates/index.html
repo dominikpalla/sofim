@@ -2,7 +2,7 @@
 <html lang="cs">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>SOFIM - Studijní asistent</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -11,6 +11,9 @@
 
     <div class="chat-container">
         <div class="chat-header">
+            <div class="logo-wrapper">
+                <span class="logo-icon">🦉</span>
+            </div>
             <div class="header-text">
                 <h1>{=} SOFIM Asistent</h1>
                 <p>Studijní oddělení FIM UHK</p>
@@ -43,6 +46,25 @@
         const userInput = document.getElementById('user-input');
         const loadingIndicator = document.getElementById('loading');
 
+        // --- NOVÁ FUNKCE: Převod Markdown na HTML ---
+        function parseMarkdown(text) {
+            if (!text) return "";
+
+            // 1. Tučné písmo: **text** -> <strong>text</strong>
+            let formatted = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+            // 2. Kurzíva: *text* -> <em>text</em> (volitelné)
+            formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
+
+            // 3. Odrážky: "- text" -> "• text" (pro hezčí seznamy)
+            formatted = formatted.replace(/^- (.*)/gm, '• $1');
+
+            // 4. Nové řádky: \n -> <br>
+            formatted = formatted.replace(/\n/g, '<br>');
+
+            return formatted;
+        }
+
         form.addEventListener('submit', async function(e) {
             e.preventDefault(); // Zabráníme refreshnutí stránky
 
@@ -50,11 +72,12 @@
             if (!message) return;
 
             // 1. Přidat zprávu uživatele
-            addMessage(message, 'user');
+            // Uživatelův vstup nemusíme formátovat jako markdown, jen nové řádky
+            addMessage(message.replace(/\n/g, '<br>'), 'user');
             userInput.value = '';
 
             // 2. Zobrazit "loading"
-            loadingIndicator.style.display = 'flex'; // Flex pro správné zarovnání teček
+            loadingIndicator.style.display = 'flex';
             scrollToBottom();
 
             try {
@@ -73,9 +96,9 @@
                 loadingIndicator.style.display = 'none';
 
                 if (data.response) {
-                    // Nahrazení nových řádků za <br>
-                    const formattedResponse = data.response.replace(/\n/g, '<br>');
-                    // Předání textu A zdrojů do funkce
+                    // --- ZDE VOLÁME NOVOU FUNKCI PRO FORMÁTOVÁNÍ ---
+                    const formattedResponse = parseMarkdown(data.response);
+
                     addMessage(formattedResponse, 'bot', data.sources);
                 } else {
                     addMessage("Omlouvám se, nastala chyba spojení.", 'bot');
@@ -88,12 +111,12 @@
             }
         });
 
-        function addMessage(text, sender, sources = []) {
+        function addMessage(htmlContent, sender, sources = []) {
             const div = document.createElement('div');
             div.classList.add('message', sender);
 
             // Obalíme obsah zprávy
-            let innerHTML = `<div class="msg-content">${text}</div>`;
+            let innerHTML = `<div class="msg-content">${htmlContent}</div>`;
 
             // Pokud je to bot a má zdroje, přidáme patičku
             if (sender === 'bot' && sources && sources.length > 0) {
