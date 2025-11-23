@@ -14,7 +14,7 @@ LLM_API_URL = "https://api.openai.com/v1/chat/completions"
 DB_HOST = "localhost"
 DB_NAME = "sofim"
 DB_USER = "root"
-DB_PASSWORD = "ChatAiSprv_1614*"
+DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 # Database BACKUP
 #DB_HOST = "dominikpalla.cz"
