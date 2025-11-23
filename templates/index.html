@@ -11,14 +11,18 @@
 
     <div class="chat-container">
         <div class="chat-header">
-            <div class="logo-wrapper">
-                <span class="logo-icon">🦉</span>
-            </div>
             <div class="header-text">
-                <h1>{=} SOFIM Asistent</h1>
+                <h1><span class="brand-symbol">{=}</span> SOFIM Asistent</h1>
                 <p>Studijní oddělení FIM UHK</p>
             </div>
         </div>
+
+        <div class="warning-banner">
+    <i class="fas fa-info-circle"></i> <span>
+        Toto je testovací verze. Chatbot se stále učí a může dělat chyby.
+        Našli jste nepřesnost? <a href="https://forms.gle/21QGh33wDoACydZC8" target="_blank" class="feedback-link">Dejte nám vědět</a>.
+    </span>
+</div>
 
         <div class="chat-messages" id="chat-box">
             <div class="message bot">
@@ -46,14 +50,14 @@
         const userInput = document.getElementById('user-input');
         const loadingIndicator = document.getElementById('loading');
 
-        // --- NOVÁ FUNKCE: Převod Markdown na HTML ---
+        // --- Funkce: Převod Markdown na HTML ---
         function parseMarkdown(text) {
             if (!text) return "";
 
             // 1. Tučné písmo: **text** -> <strong>text</strong>
             let formatted = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
 
-            // 2. Kurzíva: *text* -> <em>text</em> (volitelné)
+            // 2. Kurzíva: *text* -> <em>text</em>
             formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
 
             // 3. Odrážky: "- text" -> "• text" (pro hezčí seznamy)
@@ -65,6 +69,7 @@
             return formatted;
         }
 
+        // --- Hlavní odesílací smyčka ---
         form.addEventListener('submit', async function(e) {
             e.preventDefault(); // Zabráníme refreshnutí stránky
 
@@ -81,7 +86,7 @@
             scrollToBottom();
 
             try {
-                // 3. Odeslání na server
+                // 3. Odeslání na server (AJAX)
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: {
@@ -96,9 +101,10 @@
                 loadingIndicator.style.display = 'none';
 
                 if (data.response) {
-                    // --- ZDE VOLÁME NOVOU FUNKCI PRO FORMÁTOVÁNÍ ---
+                    // Formátování odpovědi (Markdown -> HTML)
                     const formattedResponse = parseMarkdown(data.response);
 
+                    // Přidání zprávy i se zdroji
                     addMessage(formattedResponse, 'bot', data.sources);
                 } else {
                     addMessage("Omlouvám se, nastala chyba spojení.", 'bot');
@@ -111,6 +117,7 @@
             }
         });
 
+        // --- Funkce pro přidání bubliny do chatu ---
         function addMessage(htmlContent, sender, sources = []) {
             const div = document.createElement('div');
             div.classList.add('message', sender);
@@ -118,11 +125,11 @@
             // Obalíme obsah zprávy
             let innerHTML = `<div class="msg-content">${htmlContent}</div>`;
 
-            // Pokud je to bot a má zdroje, přidáme patičku
+            // Pokud je to bot a má zdroje, přidáme patičku s ikonkami
             if (sender === 'bot' && sources && sources.length > 0) {
                 innerHTML += `<div class="sources-container">`;
                 sources.forEach(source => {
-                    // Vytvoření položky zdroje s tooltipem
+                    // Vytvoření položky zdroje s tooltipem (data-tooltip)
                     innerHTML += `
                         <div class="source-item" data-tooltip="${source}">
                             <i class="far fa-file-alt"></i> <span>Zdroj</span>

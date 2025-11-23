@@ -1,6 +1,6 @@
 /* --- ZÁKLADNÍ PROMĚNNÉ (Barvy FIM UHK) --- */
 :root {
-    --primary-color: #009fdf;
+    --primary-color: #009fdf; /* FIM Azure */
     --primary-dark: #0078a8;
     --bg-color: #f0f2f5;
     --chat-bg: #ffffff;
@@ -17,11 +17,10 @@
     margin: 0;
     padding: 0;
     font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    /* Zabrání označování textu v UI (kromě zpráv), působí to víc jako appka */
     -webkit-tap-highlight-color: transparent;
 }
 
-/* FIXACE VÝŠKY STRÁNKY */
+/* FIXACE VÝŠKY STRÁNKY (Zabrání scrollování celého okna na mobilu) */
 html, body {
     height: 100%;
     width: 100%;
@@ -59,35 +58,30 @@ body {
     padding: 15px 20px;
     display: flex;
     align-items: center;
-    gap: 15px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     z-index: 10;
     flex-shrink: 0;
 }
 
-.logo-wrapper {
-    background: white;
-    border-radius: 50%;
-    padding: 4px;
-    width: 40px; /* Pevná šířka */
-    height: 40px; /* Pevná výška */
+.header-text h1 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    margin: 0;
+    line-height: 1.2;
     display: flex;
     align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
+    gap: 10px;
 }
 
-.logo {
-    max-height: 28px;
-    max-width: 28px;
-    object-fit: contain; /* Aby se logo nedeformovalo */
-}
-
-.header-text h1 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    margin: 0; /* Reset marginu */
-    line-height: 1.2;
+/* Styl pro inline symbol {=} */
+.brand-symbol {
+    background-color: rgba(255, 255, 255, 0.2);
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    font-size: 1rem;
+    letter-spacing: -1px;
 }
 
 .header-text p {
@@ -95,6 +89,45 @@ body {
     opacity: 0.9;
     font-weight: 300;
     margin: 0;
+    margin-top: 2px;
+}
+
+/* --- VAROVNÁ LIŠTA (Moderní Design) --- */
+.warning-banner {
+    background-color: #f0f7ff; /* Velmi jemná modrá */
+    color: #333; /* Tmavé písmo */
+    padding: 12px 20px;
+    font-size: 0.9rem;
+    text-align: center;
+    flex-shrink: 0;
+    line-height: 1.5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    border-bottom: 1px solid #e1e4e8;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    z-index: 5;
+}
+
+.warning-banner i {
+    color: var(--primary-color);
+    font-size: 1.1rem;
+}
+
+/* Odkaz ve varování */
+.feedback-link {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 600;
+    padding-bottom: 1px;
+    border-bottom: 2px solid var(--primary-color);
+    transition: all 0.2s ease;
+}
+
+.feedback-link:hover {
+    background-color: rgba(0, 159, 223, 0.1);
+    border-bottom-color: transparent;
 }
 
 /* --- OBLAST ZPRÁV --- */
@@ -107,7 +140,7 @@ body {
     gap: 15px;
     background-color: #f8f9fa;
     scroll-behavior: smooth;
-    -webkit-overflow-scrolling: touch; /* Plynulé scrollování na iOS */
+    -webkit-overflow-scrolling: touch;
 }
 
 .chat-messages::-webkit-scrollbar {
@@ -120,7 +153,7 @@ body {
 
 /* --- BUBLINY --- */
 .message {
-    max-width: 85%; /* Na mobilu trochu širší */
+    max-width: 85%;
     display: flex;
     flex-direction: column;
     animation: fadeIn 0.3s ease;
@@ -137,6 +170,11 @@ body {
     font-size: 0.95rem;
     line-height: 1.5;
     word-wrap: break-word;
+}
+
+/* Tučné písmo v Markdownu */
+.msg-content strong {
+    font-weight: 700;
 }
 
 .message.user { align-self: flex-end; }
@@ -167,34 +205,40 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 0.7rem; /* Menší písmo */
+    font-size: 0.7rem;
     color: #555;
     background-color: #e2e6ea;
     padding: 4px 8px;
     border-radius: 12px;
     cursor: help;
     position: relative;
+    transition: all 0.2s ease;
 }
 
-/* Tooltip CSS (Zůstává stejné, funguje dobře) */
-.source-item:hover { color: var(--primary-color); background-color: rgba(0, 159, 223, 0.1); }
+.source-item:hover {
+    color: var(--primary-color);
+    background-color: rgba(0, 159, 223, 0.1);
+}
+
+/* Tooltip */
 .source-item::after {
     content: attr(data-tooltip);
     position: absolute; bottom: 125%; left: 50%; transform: translateX(-50%) scale(0.9);
     background-color: #222; color: #fff; padding: 6px 10px; border-radius: 6px;
     font-size: 0.75rem; white-space: nowrap; opacity: 0; visibility: hidden;
     pointer-events: none; z-index: 100; transition: all 0.2s;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
 }
 .source-item:hover::after { opacity: 1; visibility: visible; transform: translateX(-50%) scale(1); }
 
-/* --- VSTUPNÍ OBLAST (Vylepšená pro mobil) --- */
+/* --- VSTUPNÍ OBLAST --- */
 .chat-input-area {
-    padding: 12px 15px; /* Trochu méně paddingu pro úsporu místa */
+    padding: 12px 15px;
     background-color: white;
     border-top: 1px solid #eee;
     display: flex;
     gap: 10px;
-    align-items: center; /* Vertikální centr */
+    align-items: center;
     flex-shrink: 0;
 }
 
@@ -204,10 +248,10 @@ body {
     border-radius: 24px;
     border: 1px solid #ddd;
     outline: none;
-    font-size: 1rem; /* Aby iOS nezoomoval při kliknutí (musí být min 16px) */
+    font-size: 1rem;
     background-color: #f8f9fa;
     transition: border-color 0.2s;
-    -webkit-appearance: none; /* Odstraní stíny na iOS */
+    -webkit-appearance: none;
 }
 
 .chat-input-area input:focus {
@@ -216,7 +260,7 @@ body {
 }
 
 .chat-input-area button {
-    width: 44px; /* Větší touch target */
+    width: 44px;
     height: 44px;
     background-color: var(--primary-color);
     color: white;
@@ -253,10 +297,9 @@ body {
 .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
 @keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
 
-/* --- MOBILNÍ RESPONZIVITA (Kritická část) --- */
+/* --- MOBILNÍ RESPONZIVITA --- */
 @media (max-width: 600px) {
     .chat-container {
-        /* 100dvh zajistí, že to sedí přesně na viewport mobilu */
         height: 100dvh;
         max-width: 100%;
         border-radius: 0;
@@ -264,15 +307,24 @@ body {
     }
 
     .chat-header {
-        padding: 12px 15px; /* Kompaktnější hlavička */
+        padding: 12px 15px;
+    }
+
+    .header-text h1 {
+        font-size: 1.1rem;
     }
 
     .chat-messages {
         padding: 15px;
     }
 
+    .warning-banner {
+        font-size: 0.8rem;
+        padding: 10px 15px;
+        flex-wrap: wrap; /* Aby se text na malém mobilu nezlomil ošklivě */
+    }
+
     .chat-input-area {
-        /* Safe area padding pro iPhone X a novější */
         padding-bottom: calc(12px + env(safe-area-inset-bottom));
     }
 }
