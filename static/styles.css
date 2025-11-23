@@ -1,5 +1,6 @@
+/* --- ZÁKLADNÍ PROMĚNNÉ (FIM UHK Barvy) --- */
 :root {
-    --primary-color: #0065bd; /* UHK Modrá */
+    --primary-color: #0065bd; /* Oficiální modrá UHK */
     --primary-dark: #004a8f;
     --bg-color: #f0f2f5;
     --chat-bg: #ffffff;
@@ -26,11 +27,11 @@ body {
     align-items: center;
 }
 
-/* Hlavní kontejner */
+/* --- HLAVNÍ KONTEJNER --- */
 .chat-container {
     width: 100%;
-    max-width: 800px; /* Na desktopu ne příliš široké */
-    height: 90vh; /* 90% výšky okna */
+    max-width: 800px;
+    height: 90vh; /* Na desktopu trochu místa okolo */
     background-color: var(--chat-bg);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
@@ -40,7 +41,7 @@ body {
     position: relative;
 }
 
-/* Hlavička */
+/* --- HLAVIČKA --- */
 .chat-header {
     background-color: var(--primary-color);
     color: white;
@@ -49,26 +50,38 @@ body {
     align-items: center;
     gap: 15px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    z-index: 10;
 }
 
-.chat-header .logo {
-    height: 40px;
+.logo-wrapper {
     background: white;
     border-radius: 50%;
-    padding: 2px;
+    padding: 4px;
+    width: 45px;
+    height: 45px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.chat-header h1 {
-    font-size: 1.2rem;
+.logo {
+    max-height: 30px;
+    max-width: 30px;
+}
+
+.header-text h1 {
+    font-size: 1.1rem;
     font-weight: 600;
+    margin-bottom: 2px;
 }
 
-.chat-header p {
+.header-text p {
     font-size: 0.8rem;
     opacity: 0.9;
+    font-weight: 300;
 }
 
-/* Oblast zpráv (scrollovací) */
+/* --- OBLAST ZPRÁV --- */
 .chat-messages {
     flex: 1;
     padding: 20px;
@@ -77,17 +90,23 @@ body {
     flex-direction: column;
     gap: 15px;
     background-color: #f8f9fa;
+    scroll-behavior: smooth;
 }
 
-/* Bubliny zpráv */
+/* Scrollbar styling (volitelné, pro Chrome/Edge) */
+.chat-messages::-webkit-scrollbar {
+    width: 6px;
+}
+.chat-messages::-webkit-scrollbar-thumb {
+    background-color: rgba(0,0,0,0.2);
+    border-radius: 3px;
+}
+
+/* --- BUBLINY ZPRÁV --- */
 .message {
     max-width: 80%;
-    padding: 12px 16px;
-    border-radius: 18px;
-    font-size: 0.95rem;
-    line-height: 1.5;
-    position: relative;
-    word-wrap: break-word;
+    display: flex;
+    flex-direction: column;
     animation: fadeIn 0.3s ease;
 }
 
@@ -96,24 +115,113 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
+.msg-content {
+    padding: 12px 16px;
+    border-radius: 18px;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    word-wrap: break-word;
+}
+
+/* Uživatel (vpravo) */
 .message.user {
+    align-self: flex-end;
+}
+
+.message.user .msg-content {
     background-color: var(--user-msg-bg);
     color: var(--user-msg-text);
-    align-self: flex-end;
     border-bottom-right-radius: 4px;
 }
 
+/* Bot (vlevo) */
 .message.bot {
+    align-self: flex-start;
+}
+
+.message.bot .msg-content {
     background-color: var(--bot-msg-bg);
     color: var(--bot-msg-text);
-    align-self: flex-start;
     border-bottom-left-radius: 4px;
     border: 1px solid #dee2e6;
 }
 
-/* Vstupní oblast */
+/* --- ZDROJE A TOOLTIPY (NOVÉ) --- */
+.sources-container {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-left: 2px; /* Zarovnání s textem */
+}
+
+.source-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.75rem;
+    color: #666;
+    background-color: #e2e6ea; /* Lehce tmavší než pozadí bota */
+    padding: 4px 10px;
+    border-radius: 12px;
+    cursor: help;
+    position: relative; /* Pro pozicování tooltipu */
+    transition: all 0.2s ease;
+}
+
+.source-item:hover {
+    background-color: rgba(0, 101, 189, 0.15);
+    color: var(--primary-color);
+}
+
+/* Samotný Tooltip */
+.source-item::after {
+    content: attr(data-tooltip); /* Text z atributu */
+    position: absolute;
+    bottom: 120%; /* Nad elementem */
+    left: 50%;
+    transform: translateX(-50%) scale(0.9);
+
+    background-color: #222;
+    color: #fff;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    white-space: nowrap;
+
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: 100;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    transition: all 0.2s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+/* Šipka tooltipu (volitelné) */
+.source-item::before {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border-width: 5px;
+    border-style: solid;
+    border-color: #222 transparent transparent transparent;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s;
+}
+
+.source-item:hover::after,
+.source-item:hover::before {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) scale(1);
+}
+
+/* --- VSTUPNÍ OBLAST --- */
 .chat-input-area {
-    padding: 20px;
+    padding: 15px 20px;
     background-color: white;
     border-top: 1px solid #eee;
     display: flex;
@@ -123,72 +231,86 @@ body {
 
 .chat-input-area input {
     flex: 1;
-    padding: 12px 15px;
+    padding: 12px 20px;
     border-radius: 25px;
     border: 1px solid #ddd;
     outline: none;
     font-size: 1rem;
     transition: border-color 0.3s;
+    background-color: #f8f9fa;
 }
 
 .chat-input-area input:focus {
     border-color: var(--primary-color);
+    background-color: white;
+    box-shadow: 0 0 0 3px rgba(0, 101, 189, 0.1);
 }
 
 .chat-input-area button {
+    width: 45px;
+    height: 45px;
     background-color: var(--primary-color);
     color: white;
     border: none;
-    padding: 12px 20px;
-    border-radius: 25px;
+    border-radius: 50%;
     cursor: pointer;
-    font-weight: 600;
-    transition: background-color 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.3s, transform 0.2s;
 }
 
 .chat-input-area button:hover {
     background-color: var(--primary-dark);
+    transform: scale(1.05);
 }
 
-/* Načítací animace (tři tečky) */
+/* --- LOADING (TŘI TEČKY) --- */
 .typing-indicator {
-    display: none;
+    display: none; /* Defaultně skryté */
     align-self: flex-start;
     background-color: var(--bot-msg-bg);
-    padding: 10px 15px;
+    padding: 12px 16px;
     border-radius: 18px;
     border-bottom-left-radius: 4px;
     margin-bottom: 10px;
+    gap: 5px;
 }
 
 .typing-indicator span {
-    display: inline-block;
     width: 8px;
     height: 8px;
-    background-color: #aaa;
+    background-color: #999;
     border-radius: 50%;
-    animation: typing 1.4s infinite both;
-    margin: 0 2px;
+    animation: typing 1.4s infinite ease-in-out both;
 }
 
-.typing-indicator span:nth-child(1) { animation-delay: 0s; }
-.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+.typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+.typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
 
 @keyframes typing {
     0%, 80%, 100% { transform: scale(0); }
     40% { transform: scale(1); }
 }
 
-/* RESPONSIVITA (Mobil) */
+/* --- MOBILNÍ RESPONZIVITA --- */
 @media (max-width: 600px) {
     .chat-container {
-        height: 100vh;
+        height: 100vh; /* Na mobilu přes celou výšku */
         max-width: 100%;
         border-radius: 0;
+        box-shadow: none;
     }
 
     .message {
         max-width: 90%;
+    }
+
+    .chat-header {
+        padding: 10px 15px;
+    }
+
+    .header-text h1 {
+        font-size: 1rem;
     }
 }

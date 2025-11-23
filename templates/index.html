@@ -5,12 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SOFIM - Studijní asistent</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body>
 
     <div class="chat-container">
         <div class="chat-header">
-            <div>
+            <div class="header-text">
                 <h1>{=} SOFIM Asistent</h1>
                 <p>Studijní oddělení FIM UHK</p>
             </div>
@@ -18,7 +19,10 @@
 
         <div class="chat-messages" id="chat-box">
             <div class="message bot">
-                Ahoj! Jsem SOFIM, tvůj virtuální asistent. 🦉 S čím ti mohu dnes pomoci ohledně studia?
+                <div class="msg-content">
+                    Ahoj! Jsem SOFIM, tvůj virtuální asistent. 🦉<br>
+                    S čím ti mohu dnes pomoci ohledně studia?
+                </div>
             </div>
 
             <div class="typing-indicator" id="loading">
@@ -28,7 +32,8 @@
 
         <form class="chat-input-area" id="chat-form">
             <input type="text" id="user-input" placeholder="Napiš zprávu..." autocomplete="off" required>
-            <button type="submit">Odeslat</button>
+            <button type="submit">
+                <i class="fas fa-paper-plane"></i> </button>
         </form>
     </div>
 
@@ -44,16 +49,16 @@
             const message = userInput.value.trim();
             if (!message) return;
 
-            // 1. Přidat zprávu uživatele do chatu
+            // 1. Přidat zprávu uživatele
             addMessage(message, 'user');
             userInput.value = '';
 
-            // 2. Zobrazit "loading" (Sofim píše...)
-            loadingIndicator.style.display = 'block';
+            // 2. Zobrazit "loading"
+            loadingIndicator.style.display = 'flex'; // Flex pro správné zarovnání teček
             scrollToBottom();
 
             try {
-                // 3. Odeslání na server (AJAX request)
+                // 3. Odeslání na server
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: {
@@ -64,13 +69,14 @@
 
                 const data = await response.json();
 
-                // 4. Skrýt loading a přidat odpověď bota
+                // 4. Skrýt loading a zobrazit odpověď
                 loadingIndicator.style.display = 'none';
 
                 if (data.response) {
-                    // Nahrazení nových řádků za <br> pro HTML
+                    // Nahrazení nových řádků za <br>
                     const formattedResponse = data.response.replace(/\n/g, '<br>');
-                    addMessage(formattedResponse, 'bot');
+                    // Předání textu A zdrojů do funkce
+                    addMessage(formattedResponse, 'bot', data.sources);
                 } else {
                     addMessage("Omlouvám se, nastala chyba spojení.", 'bot');
                 }
@@ -82,12 +88,30 @@
             }
         });
 
-        function addMessage(text, sender) {
+        function addMessage(text, sender, sources = []) {
             const div = document.createElement('div');
             div.classList.add('message', sender);
-            div.innerHTML = text; // Používáme innerHTML kvůli <br>
 
-            // Vložíme zprávu PŘED indikátor načítání
+            // Obalíme obsah zprávy
+            let innerHTML = `<div class="msg-content">${text}</div>`;
+
+            // Pokud je to bot a má zdroje, přidáme patičku
+            if (sender === 'bot' && sources && sources.length > 0) {
+                innerHTML += `<div class="sources-container">`;
+                sources.forEach(source => {
+                    // Vytvoření položky zdroje s tooltipem
+                    innerHTML += `
+                        <div class="source-item" data-tooltip="${source}">
+                            <i class="far fa-file-alt"></i> <span>Zdroj</span>
+                        </div>
+                    `;
+                });
+                innerHTML += `</div>`;
+            }
+
+            div.innerHTML = innerHTML;
+
+            // Vložíme PŘED indikátor načítání
             chatBox.insertBefore(div, loadingIndicator);
             scrollToBottom();
         }

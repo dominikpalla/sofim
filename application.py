@@ -92,12 +92,23 @@ def api_chat():
     embeddings = load_embeddings_from_db()
     best_matches = find_top_k_matches(query_embedding, embeddings, k=3)
 
+    response_sources = []
     if best_matches:
         response_text = get_response_from_llm(best_matches, query)
+
+        # --- NOVÉ: Vytáhneme unikátní názvy souborů ---
+        # Použijeme set(), abychom neměli ten stejný soubor 3x, pokud se našly 3 chunky z jednoho PDF
+        seen_sources = set()
+        for match in best_matches:
+            src = match.get('source', 'Neznámý zdroj')
+            if src not in seen_sources:
+                response_sources.append(src)
+                seen_sources.add(src)
     else:
         response_text = "Bohužel k tomuto dotazu nemám v databázi žádné informace."
 
-    return jsonify({"response": response_text})
+    # Vracíme text I zdroje
+    return jsonify({"response": response_text, "sources": response_sources})
 
 
 @app.route("/", methods=["GET", "POST"])

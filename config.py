@@ -11,13 +11,19 @@ OPENAI_EMBEDDING_URL = "https://api.openai.com/v1/embeddings"
 LLM_API_URL = "https://api.openai.com/v1/chat/completions"
 
 # Database
-DB_HOST = "dominikpalla.cz"
-DB_NAME = "pyto_1"
-DB_USER = "pyto.1"
-DB_PASSWORD = "^CiQoyGxYtO3O;zU7"
+DB_HOST = "localhost"
+DB_NAME = "sofim"
+DB_USER = "root"
+DB_PASSWORD = "ChatAiSprv_1614*"
+
+# Database BACKUP
+#DB_HOST = "dominikpalla.cz"
+#DB_NAME = "pyto_1"
+#DB_USER = "pyto.1"
+#DB_PASSWORD = "^CiQoyGxYtO3O;zU7"
 
 # Google Drive nastavení
 # ID složky na Google Disku, kterou má robot sledovat
-GOOGLE_DRIVE_FOLDER_ID = "TADY_BUDE_ID_TVOJE_SLOZKY_Z_URL_ADRESY"
+GOOGLE_DRIVE_FOLDER_ID = "1VHfrmsyhP3qDnnExvtMDxqutEeNKvd4f"
 # Cesta k souboru s credentials od Googlu (stáhneš z Google Cloud Console)
 GOOGLE_CREDENTIALS_FILE = "credentials.json"
