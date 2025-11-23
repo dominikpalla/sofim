@@ -1,10 +1,10 @@
-/* --- ZÁKLADNÍ PROMĚNNÉ (FIM UHK Barvy) --- */
+/* --- ZÁKLADNÍ PROMĚNNÉ (Barvy FIM UHK) --- */
 :root {
-    --primary-color: #0065bd; /* Oficiální modrá UHK */
-    --primary-dark: #004a8f;
+    --primary-color: #009fdf; /* FIM Azure */
+    --primary-dark: #0078a8;  /* Tmavší odstín pro hover efekt */
     --bg-color: #f0f2f5;
     --chat-bg: #ffffff;
-    --user-msg-bg: #0065bd;
+    --user-msg-bg: #009fdf;   /* Bublina uživatele */
     --user-msg-text: #ffffff;
     --bot-msg-bg: #e9ecef;
     --bot-msg-text: #333333;
@@ -19,9 +19,16 @@
     font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
+/* FIXACE VÝŠKY STRÁNKY (Zabrání scrollování celého okna na mobilu) */
+html, body {
+    height: 100%;
+    width: 100%;
+    overflow: hidden; /* Zabrání scrollování celé stránky */
+    position: fixed; /* Důležité pro iOS Safari */
+}
+
 body {
     background-color: var(--bg-color);
-    height: 100vh;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -51,6 +58,7 @@ body {
     gap: 15px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     z-index: 10;
+    flex-shrink: 0; /* Hlavička se nikdy nezmenší */
 }
 
 .logo-wrapper {
@@ -83,9 +91,9 @@ body {
 
 /* --- OBLAST ZPRÁV --- */
 .chat-messages {
-    flex: 1;
+    flex: 1; /* Zabere veškeré volné místo */
     padding: 20px;
-    overflow-y: auto;
+    overflow-y: auto; /* Scrollování pouze zde */
     display: flex;
     flex-direction: column;
     gap: 15px;
@@ -146,13 +154,13 @@ body {
     border: 1px solid #dee2e6;
 }
 
-/* --- ZDROJE A TOOLTIPY (NOVÉ) --- */
+/* --- ZDROJE A TOOLTIPY --- */
 .sources-container {
     margin-top: 8px;
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding-left: 2px; /* Zarovnání s textem */
+    padding-left: 2px;
 }
 
 .source-item {
@@ -161,24 +169,24 @@ body {
     gap: 5px;
     font-size: 0.75rem;
     color: #666;
-    background-color: #e2e6ea; /* Lehce tmavší než pozadí bota */
+    background-color: #e2e6ea;
     padding: 4px 10px;
     border-radius: 12px;
     cursor: help;
-    position: relative; /* Pro pozicování tooltipu */
+    position: relative;
     transition: all 0.2s ease;
 }
 
 .source-item:hover {
-    background-color: rgba(0, 101, 189, 0.15);
+    background-color: rgba(0, 159, 223, 0.15); /* Světlejší verze FIM barvy */
     color: var(--primary-color);
 }
 
 /* Samotný Tooltip */
 .source-item::after {
-    content: attr(data-tooltip); /* Text z atributu */
+    content: attr(data-tooltip);
     position: absolute;
-    bottom: 120%; /* Nad elementem */
+    bottom: 120%;
     left: 50%;
     transform: translateX(-50%) scale(0.9);
 
@@ -197,7 +205,7 @@ body {
     transition: all 0.2s cubic-bezier(0.68, -0.55, 0.265, 1.55);
 }
 
-/* Šipka tooltipu (volitelné) */
+/* Šipka tooltipu */
 .source-item::before {
     content: '';
     position: absolute;
@@ -227,6 +235,7 @@ body {
     display: flex;
     gap: 10px;
     align-items: center;
+    flex-shrink: 0; /* Vstupní oblast se nikdy nezmenší */
 }
 
 .chat-input-area input {
@@ -243,7 +252,7 @@ body {
 .chat-input-area input:focus {
     border-color: var(--primary-color);
     background-color: white;
-    box-shadow: 0 0 0 3px rgba(0, 101, 189, 0.1);
+    box-shadow: 0 0 0 3px rgba(0, 159, 223, 0.2);
 }
 
 .chat-input-area button {
@@ -267,7 +276,7 @@ body {
 
 /* --- LOADING (TŘI TEČKY) --- */
 .typing-indicator {
-    display: none; /* Defaultně skryté */
+    display: none;
     align-self: flex-start;
     background-color: var(--bot-msg-bg);
     padding: 12px 16px;
@@ -293,21 +302,44 @@ body {
     40% { transform: scale(1); }
 }
 
-/* --- MOBILNÍ RESPONZIVITA --- */
+/* --- MOBILNÍ RESPONZIVITA (Upraveno pro fixaci spodní lišty) --- */
 @media (max-width: 600px) {
     .chat-container {
-        height: 100vh; /* Na mobilu přes celou výšku */
+        /* Použijeme 100dvh (dynamic viewport height) pro moderní mobily.
+           To zajistí, že lišta nezmizí pod adresním řádkem prohlížeče. */
+        height: 100dvh;
+        height: 100%; /* Fallback pro starší prohlížeče */
+
         max-width: 100%;
         border-radius: 0;
         box-shadow: none;
-    }
 
-    .message {
-        max-width: 90%;
+        /* Flexbox zajistí roztažení */
+        display: flex;
+        flex-direction: column;
     }
 
     .chat-header {
         padding: 10px 15px;
+    }
+
+    .chat-messages {
+        /* Zprávy zaberou veškeré dostupné místo uprostřed */
+        flex-grow: 1;
+        overflow-y: auto; /* Scrollování POUZE zde */
+        -webkit-overflow-scrolling: touch; /* Plynulost na iOS */
+    }
+
+    .chat-input-area {
+        /* Lišta se nikdy nezmenší a bude vždy dole */
+        position: relative;
+        z-index: 100;
+        padding-bottom: env(safe-area-inset-bottom); /* Ochrana pro iPhony bez tlačítka */
+        background-color: white;
+    }
+
+    .message {
+        max-width: 90%;
     }
 
     .header-text h1 {
