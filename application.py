@@ -1,113 +1,128 @@
-import pymysql
 import numpy as np
 import json
-from flask import Flask, request, render_template, redirect, url_for
+from flask import Flask, request, render_template
 import requests
-import os
-from database import get_db_connection, insert_embedding_to_db, load_embeddings_from_db, update_embedding_in_db, \
-    delete_embedding_from_db
-from config import OPENAI_API_KEY, EMBEDDING_MODEL, OPENAI_API_URL, LLM_API_URL
+from database import load_embeddings_from_db
+from config import OPENAI_API_KEY, EMBEDDING_MODEL, OPENAI_EMBEDDING_URL, LLM_API_URL
+from flask import jsonify
 
 app = Flask(__name__)
 
 
+# --- Pomocné funkce ---
 
-# Získání embeddingu pro dotaz
 def get_query_embedding(query):
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
     data = {"input": query, "model": EMBEDDING_MODEL}
-    response = requests.post(OPENAI_API_URL, headers=headers, json=data)
-
+    response = requests.post(OPENAI_EMBEDDING_URL, headers=headers, json=data)
     if response.status_code == 200:
-        return np.array(response.json()["data"][0]["embedding"])  # ✅ Ujistíme se, že výstup je `numpy.array`
-
+        return np.array(response.json()["data"][0]["embedding"])
     return None
 
 
-# Výpočet kosinové podobnosti
 def cosine_similarity(v1, v2):
-    return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+    norm_v1 = np.linalg.norm(v1)
+    norm_v2 = np.linalg.norm(v2)
+    if norm_v1 == 0 or norm_v2 == 0:
+        return 0
+    return np.dot(v1, v2) / (norm_v1 * norm_v2)
 
 
-# Vyhledání nejlepšího záznamu
-def find_best_match(query_embedding, embeddings):
-    valid_embeddings = [(e[0], e[1], e[2], e[3]) for e in embeddings if
-                        len(e[3]) > 0]  # ✅ Filtrování prázdných embeddingů
-    if not valid_embeddings:
-        return None
-    return max(valid_embeddings, key=lambda x: cosine_similarity(query_embedding, x[3]),
-               default=None)  # ✅ Porovnáváme pouze `numpy.array`
+def find_top_k_matches(query_embedding, embeddings, k=3):
+    """Najde K nejlepších shod v databázi."""
+    if not embeddings:
+        return []
+
+    scored_embeddings = []
+    for item in embeddings:
+        score = cosine_similarity(query_embedding, item["vector"])
+        scored_embeddings.append((score, item))
+
+    # Seřadit sestupně podle skóre
+    scored_embeddings.sort(key=lambda x: x[0], reverse=True)
+
+    # Vrátit top K (jen pokud je skóre aspoň trochu relevantní, např. > 0.4)
+    return [item for score, item in scored_embeddings[:k] if score > 0.0]
 
 
-# Získání odpovědi od LLM
-def get_response_from_llm(context, query):
+def get_response_from_llm(context_list, query):
+    # Sestavení kontextu z více chunků
+    context_text = ""
+    for idx, item in enumerate(context_list):
+        context_text += f"\n--- ZDROJ {idx + 1}: {item['title']} ({item['source']}) ---\n"
+        context_text += item['text'] + "\n"
+
+    system_prompt = """
+    Jsi nápomocný AI asistent 'Sofim' pro Studijní oddělení FIM UHK. 
+    Odpovídej na otázky studentů POUZE na základě poskytnutého kontextu.
+    Pokud odpověď v kontextu není, slušně řekni, že tuto informaci nemáš, nevymýšlej si.
+    Odpovídej stručně, jasně a přátelsky (tykání/vykání dle dotazu, defaultně vykání).
+    """
+
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
     data = {
-        "model": "gpt-4",
+        "model": "gpt-4o",  # Nebo gpt-4o-mini
         "messages": [
-            {"role": "system", "content": "Jsi chatbot studijního oddělení a pomáháš studentům s odpovědí na dotaz, pokud k němu máš potřebné informace."},
-            {"role": "user",
-             "content": f"Na základě následujícího kontextu odpověz na dotaz:\n\nKontext: {context}\n\nDotaz: {query}"}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Kontext:\n{context_text}\n\nDotaz studenta: {query}"}
         ],
-        "max_tokens": 500
+        "temperature": 0.5
     }
+
     response = requests.post(LLM_API_URL, headers=headers, json=data)
-    return response.json()["choices"][0]["message"][
-        "content"].strip() if response.status_code == 200 else "Chyba při generování odpovědi."
+
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"].strip()
+    return "Omlouvám se, momentálně nejsem ve spojení se svým mozkem (chyba API)."
 
 
-# Hlavní stránka s chatem
+
+# --- Routes ---
+
+# --- API Endpoint pro moderní chat (AJAX) ---
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    data = request.get_json()
+    query = data.get("query")
+
+    if not query:
+        return jsonify({"error": "Empty query"}), 400
+
+    query_embedding = get_query_embedding(query)
+    embeddings = load_embeddings_from_db()
+    best_matches = find_top_k_matches(query_embedding, embeddings, k=3)
+
+    if best_matches:
+        response_text = get_response_from_llm(best_matches, query)
+    else:
+        response_text = "Bohužel k tomuto dotazu nemám v databázi žádné informace."
+
+    return jsonify({"response": response_text})
+
+
 @app.route("/", methods=["GET", "POST"])
 def home():
+    response = None
+    query = None
+
     if request.method == "POST":
         query = request.form.get("query")
-        query_embedding = get_query_embedding(query)
-        embeddings = load_embeddings_from_db()
-        best_match = find_best_match(query_embedding, embeddings)
+        if query:
+            query_embedding = get_query_embedding(query)
 
-        response = get_response_from_llm(best_match[2], query) if best_match else "Nebyl nalezen vhodný kontext."
-        return render_template("index.html", query=query, response=response)
-    return render_template("index.html")
+            # Načíst DB (v produkci by se to dělalo jen jednou při startu appky a drželo v paměti)
+            embeddings = load_embeddings_from_db()
 
+            # Najít nejlepší shody (Top-3)
+            best_matches = find_top_k_matches(query_embedding, embeddings, k=3)
 
-# Administrace pro nahrávání textů
-@app.route("/admin", methods=["GET", "POST"])
-def admin():
-    if request.method == "POST":
-        title = request.form.get("title")
-        text = request.form.get("text")
-        embedding = get_query_embedding(text)
+            if best_matches:
+                response = get_response_from_llm(best_matches, query)
+            else:
+                response = "Bohužel k tomuto dotazu nemám v databázi žádné informace. Zkuste se zeptat jinak nebo kontaktujte studijní oddělení."
 
-        if embedding is None:
-            return render_template("admin.html", embeddings=load_embeddings_from_db(),
-                                   error="Chyba: Nepodařilo se získat embedding.")
-
-        insert_embedding_to_db(title, text, embedding)
-
-    embeddings = load_embeddings_from_db()
-    return render_template("admin.html", embeddings=embeddings)
-
-
-# Aktualizace záznamu
-@app.route("/admin/edit/<int:record_id>", methods=["GET", "POST"])
-def edit_record(record_id):
-    if request.method == "POST":
-        title = request.form.get("title")
-        text = request.form.get("text")
-        update_embedding_in_db(record_id, title, text)
-        return redirect(url_for("admin"))
-
-    embeddings = load_embeddings_from_db()
-    record = next((e for e in embeddings if e[0] == record_id), None)
-    return render_template("edit.html", record=record)
-
-
-# Smazání záznamu
-@app.route("/admin/delete/<int:record_id>", methods=["POST"])
-def delete_record(record_id):
-    delete_embedding_from_db(record_id)
-    return redirect(url_for("admin"))
+    return render_template("index.html", query=query, response=response)
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001)
+    app.run(host="0.0.0.0", port=5001, debug=True)

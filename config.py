@@ -1,9 +1,23 @@
-OPENAI_API_KEY= "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"
+import os
+from dotenv import load_dotenv
+
+# Načte proměnné z .env souboru
+load_dotenv()
+
+# OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+EMBEDDING_MODEL = "text-embedding-3-small" # Novější a levnější model
+OPENAI_EMBEDDING_URL = "https://api.openai.com/v1/embeddings"
+LLM_API_URL = "https://api.openai.com/v1/chat/completions"
+
+# Database
 DB_HOST = "dominikpalla.cz"
 DB_NAME = "pyto_1"
 DB_USER = "pyto.1"
 DB_PASSWORD = "^CiQoyGxYtO3O;zU7"
 
-EMBEDDING_MODEL = "text-embedding-ada-002"
-OPENAI_API_URL = "https://api.openai.com/v1/embeddings"
-LLM_API_URL = "https://api.openai.com/v1/chat/completions"
+# Google Drive nastavení
+# ID složky na Google Disku, kterou má robot sledovat
+GOOGLE_DRIVE_FOLDER_ID = "TADY_BUDE_ID_TVOJE_SLOZKY_Z_URL_ADRESY"
+# Cesta k souboru s credentials od Googlu (stáhneš z Google Cloud Console)
+GOOGLE_CREDENTIALS_FILE = "credentials.json"

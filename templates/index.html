@@ -3,43 +3,99 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SOFIM - Interaktivní dotazovací nástroj</title>
+    <title>SOFIM - Studijní asistent</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-    <div class="container">
-        <!-- Logo fakulty -->
-        <div class="header">
-            <img src="{{ url_for('static', filename='fim_logo.png') }}" alt="FIM UHK" class="logo">
-            <h1>Studijní asistent SOFIM</h1>
+
+    <div class="chat-container">
+        <div class="chat-header">
+            <div>
+                <h1>{=} SOFIM Asistent</h1>
+                <p>Studijní oddělení FIM UHK</p>
+            </div>
         </div>
 
-        <!-- Formulář pro dotaz -->
-        <form method="post" onsubmit="showLoading()">
-            <label for="query">Zadejte svůj dotaz:</label>
-            <input type="text" id="query" name="query" placeholder="Např. Jaké jsou podmínky pro státnice?" required>
-            <button type="submit">Získat odpověď</button>
-        </form>
-
-        <!-- Načítací animace -->
-        <div id="loading-spinner" class="spinner"></div>
-
-        <!-- Výstup odpovědi -->
-        {% if response %}
-            <div class="output-box">
-                <h2>Váš dotaz:</h2>
-                <p class="user-query">{{ query }}</p>
-
-                <h2>Odpověď SOFIM:</h2>
-                <p class="bot-response">{{ response }}</p>
+        <div class="chat-messages" id="chat-box">
+            <div class="message bot">
+                Ahoj! Jsem SOFIM, tvůj virtuální asistent. 🦉 S čím ti mohu dnes pomoci ohledně studia?
             </div>
-        {% endif %}
+
+            <div class="typing-indicator" id="loading">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+
+        <form class="chat-input-area" id="chat-form">
+            <input type="text" id="user-input" placeholder="Napiš zprávu..." autocomplete="off" required>
+            <button type="submit">Odeslat</button>
+        </form>
     </div>
 
     <script>
-        function showLoading() {
-            document.getElementById("loading-spinner").style.display = "block";
+        const form = document.getElementById('chat-form');
+        const chatBox = document.getElementById('chat-box');
+        const userInput = document.getElementById('user-input');
+        const loadingIndicator = document.getElementById('loading');
+
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault(); // Zabráníme refreshnutí stránky
+
+            const message = userInput.value.trim();
+            if (!message) return;
+
+            // 1. Přidat zprávu uživatele do chatu
+            addMessage(message, 'user');
+            userInput.value = '';
+
+            // 2. Zobrazit "loading" (Sofim píše...)
+            loadingIndicator.style.display = 'block';
+            scrollToBottom();
+
+            try {
+                // 3. Odeslání na server (AJAX request)
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query: message })
+                });
+
+                const data = await response.json();
+
+                // 4. Skrýt loading a přidat odpověď bota
+                loadingIndicator.style.display = 'none';
+
+                if (data.response) {
+                    // Nahrazení nových řádků za <br> pro HTML
+                    const formattedResponse = data.response.replace(/\n/g, '<br>');
+                    addMessage(formattedResponse, 'bot');
+                } else {
+                    addMessage("Omlouvám se, nastala chyba spojení.", 'bot');
+                }
+
+            } catch (error) {
+                loadingIndicator.style.display = 'none';
+                addMessage("Chyba: Nepodařilo se kontaktovat server.", 'bot');
+                console.error(error);
+            }
+        });
+
+        function addMessage(text, sender) {
+            const div = document.createElement('div');
+            div.classList.add('message', sender);
+            div.innerHTML = text; // Používáme innerHTML kvůli <br>
+
+            // Vložíme zprávu PŘED indikátor načítání
+            chatBox.insertBefore(div, loadingIndicator);
+            scrollToBottom();
+        }
+
+        function scrollToBottom() {
+            chatBox.scrollTop = chatBox.scrollHeight;
         }
     </script>
+
 </body>
 </html>
