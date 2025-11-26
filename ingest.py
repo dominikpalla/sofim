@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import numpy as np
+import pandas as pd
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -26,10 +27,15 @@ def get_drive_service():
 def process_file_content(service, file_item):
     print(f"  📄 Stahuji soubor: {file_item['name']}...")
 
-    supported_types = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+    # Podporované typy + CSV
+    supported_types = [
+        'application/pdf',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'text/csv',
+        'application/vnd.ms-excel'  # Někdy se CSV tváří jako Excel
+    ]
 
-    # Kontrola, zda jde o podporovaný typ
-    is_supported = file_item['mimeType'] in supported_types or file_item['name'].endswith(('.pdf', '.docx'))
+    is_supported = file_item['mimeType'] in supported_types or file_item['name'].endswith(('.pdf', '.docx', '.csv'))
 
     if not is_supported:
         return None
@@ -43,21 +49,65 @@ def process_file_content(service, file_item):
             status, done = downloader.next_chunk()
 
         fh.seek(0)
+
+        # --- ZPRACOVÁNÍ CSV (PŘEDMĚTY) ---
+        if file_item['name'].endswith('.csv'):
+            try:
+                # Načteme CSV pomocí Pandas (zvládne různé kódování i oddělovače)
+                # Zkusíme detekovat oddělovač, nebo defaultně čárku/středník
+                # První pokus: UTF-8
+                try:
+                    df = pd.read_csv(fh, encoding='utf-8', on_bad_lines='skip')
+                except:
+                    # Druhý pokus: Windows-1250 (české) a středník
+                    fh.seek(0)
+                    df = pd.read_csv(fh, sep=';', encoding='cp1250', on_bad_lines='skip')
+
+                # Nahradíme NaN za prázdné stringy
+                df = df.fillna("")
+
+                # Vrátíme DataFrame přímo, ne text
+                return {"filename": file_item['name'], "type": "csv", "data": df}
+
+            except Exception as e:
+                print(f"   ❌ Chyba čtení CSV {file_item['name']}: {e}")
+                return None
+
+        # --- ZPRACOVÁNÍ DOCX ---
         text = ""
-
         if file_item['name'].endswith('.docx'):
-            doc = docx.Document(fh)
-            text = "\n".join([p.text for p in doc.paragraphs if p.text.strip() != ""])
+            try:
+                doc = docx.Document(fh)
+                text = "\n".join([p.text for p in doc.paragraphs if p.text.strip() != ""])
+            except Exception as e:
+                print(f"   ❌ Chyba čtení DOCX {file_item['name']}: {e}")
 
+        # --- ZPRACOVÁNÍ PDF ---
         elif file_item['name'].endswith('.pdf'):
-            reader = PdfReader(fh)
-            for page in reader.pages:
-                extracted = page.extract_text()
-                if extracted:
-                    text += extracted + "\n"
+            try:
+                reader = PdfReader(fh)
+                count = 0
+                for page in reader.pages:
+                    extracted = page.extract_text()
+                    if extracted:
+                        text += extracted + "\n"
+                        count += 1
 
+                # Detekce "prázdného" PDF (sken)
+                if len(text.strip()) == 0 and count > 0:
+                    print(f"   ⚠️ PDF {file_item['name']} má stránky, ale žádný text. Asi sken?")
+            except Exception as e:
+                print(f"   ❌ Chyba čtení PDF {file_item['name']}: {e}")
+
+        # Pokud se podařilo načíst text z dokumentu
         if text:
-            return {"filename": file_item['name'], "text": text}
+            # Kontrola délky textu
+            text_len = len(text.strip())
+            if text_len < 10:
+                print(f"   ⚠️ VAROVÁNÍ: Soubor {file_item['name']} obsahuje jen {text_len} znaků! (Ignoruji)")
+                return None
+
+            return {"filename": file_item['name'], "type": "text", "text": text}
 
     except Exception as e:
         print(f"⚠️ Chyba při stahování {file_item['name']}: {e}")
@@ -98,11 +148,12 @@ def get_files_recursive(service, folder_id):
     return results_list
 
 
-# --- 2. Inteligentní Chunking ---
+# --- 2. Chunking funkce ---
+
+# A) Sémantické řezání pro dokumenty (PDF/DOCX)
 def semantic_chunking(text, filename):
     print(f"🧠 Sémantické řezání souboru: {filename}...")
 
-    # Fallback pro prázdný text
     if not text or len(text.strip()) < 10:
         return []
 
@@ -124,7 +175,7 @@ def semantic_chunking(text, filename):
     """
 
     data = {
-        "model": "gpt-4o-mini",  # Používáme levnější model pro chunking
+        "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": prompt}],
         "response_format": {"type": "json_object"}
     }
@@ -140,25 +191,62 @@ def semantic_chunking(text, filename):
         content = result["choices"][0]["message"]["content"]
         json_content = json.loads(content)
 
-        # Různé formáty, co může AI vrátit (zajištění kompatibility)
-        if "chunks" in json_content:
-            return json_content["chunks"]
-        if "items" in json_content:
-            return json_content["items"]
-        if isinstance(json_content, list):
-            return json_content
+        if "chunks" in json_content: return json_content["chunks"]
+        if "items" in json_content: return json_content["items"]
+        if isinstance(json_content, list): return json_content
 
     except Exception as e:
         print(f"⚠️ Chyba AI chunkingu u {filename}: {e}. Používám Fallback.")
 
-    # --- ZÁCHRANNÁ BRZDA (FALLBACK) ---
-    # Pokud cokoliv selže, vrátíme celý text jako jeden chunk.
+    # Fallback: vrátí celý text jako jeden chunk
     return [{"title": filename, "content": text}]
+
+
+# B) Řádkové řezání pro tabulky (CSV)
+def csv_row_chunking(df, filename):
+    print(f"📊 Zpracovávám tabulku předmětů: {filename} ({len(df)} řádků)...")
+    chunks = []
+
+    for index, row in df.iterrows():
+        row_dict = row.to_dict()
+
+        # Inteligentní hledání názvu a kódu pro titulek
+        nazev = "Neznámý předmět"
+        kod = ""
+
+        for k, v in row_dict.items():
+            k_lower = str(k).lower()
+            if "název" in k_lower or "nazev" in k_lower or "předmět" in k_lower:
+                nazev = str(v)
+            if "kód" in k_lower or "zkratka" in k_lower or "code" in k_lower:
+                kod = str(v)
+
+        # Sestavení titulku
+        if kod:
+            title = f"Předmět: {nazev} ({kod})"
+        else:
+            title = f"Předmět: {nazev}"
+
+        title = title.strip()
+
+        # Sestavení obsahu (vypíšeme všechny sloupce)
+        content_lines = [f"--- Detail záznamu: {title} ---"]
+        for col_name, val in row_dict.items():
+            if val and str(val).strip():  # Vynecháme prázdné buňky
+                content_lines.append(f"{col_name}: {val}")
+
+        content = "\n".join(content_lines)
+
+        chunks.append({
+            "title": title,
+            "content": content
+        })
+
+    return chunks
 
 
 # --- 3. Embedding ---
 def get_embedding(text):
-    # Ochrana před prázdným vstupem
     if not text or not text.strip():
         return None
 
@@ -190,29 +278,33 @@ if __name__ == "__main__":
         print(f"✅ Nalezeno a staženo celkem {len(files_data)} souborů.")
 
         if files_data:
-            # Vyčistíme DB, ať tam nemáme duplicity
+            # Smažeme stará data
             clear_database()
             print("🧹 Databáze vyčištěna.")
 
             for i, file_item in enumerate(files_data):
-                # Info o postupu
-                print(f"[{i + 1}/{len(files_data)}] Zpracovávám: {file_item['filename']}")
+                chunks = []
 
-                chunks = semantic_chunking(file_item['text'], file_item['filename'])
+                # Větvení logiky podle typu souboru
+                if file_item.get("type") == "csv":
+                    # CSV -> Řádkový chunking
+                    chunks = csv_row_chunking(file_item['data'], file_item['filename'])
+                else:
+                    # Text/PDF -> AI chunking
+                    print(f"[{i + 1}/{len(files_data)}] Zpracovávám: {file_item['filename']}")
+                    chunks = semantic_chunking(file_item['text'], file_item['filename'])
 
-                # Kontrola proti NoneType erroru
                 if not chunks:
-                    print("   ⚠️ Žádné chunky nevráceny, přeskakuji.")
                     continue
 
                 for chunk in chunks:
-                    title = chunk.get("title", file_item['filename'])  # Fallback na název souboru
+                    title = chunk.get("title", file_item['filename'])
                     text_content = chunk.get("content", "")
 
                     if text_content:
-                        # --- ZDE JE TA KLÍČOVÁ ZMĚNA: Obohacení kontextu ---
-                        # Vytváříme "bohatý text" jen pro výpočet embeddingu (vektoru).
-                        # Do databáze ale uložíme čistý text_content, aby se uživateli zobrazoval hezky.
+                        # --- KLÍČOVÉ: Obohacení kontextu ---
+                        # Vektor se počítá z textu, který obsahuje i název souboru a téma.
+                        # Tím řešíme problém, že "termín" v jednom souboru znamená něco jiného než v druhém.
                         enriched_text_for_embedding = (
                             f"Zdrojový soubor: {file_item['filename']}\n"
                             f"Téma: {title}\n"
@@ -223,8 +315,14 @@ if __name__ == "__main__":
 
                         if emb is not None:
                             insert_embedding_to_db(title, text_content, emb, file_item['filename'])
-                            print(f"   💾 Uloženo: {title[:40]}...")
+
+                            # U CSV nevypisujeme log pro každý řádek (bylo by to moc dlouhé)
+                            if file_item.get("type") != "csv":
+                                print(f"   💾 Uloženo: {title[:40]}...")
+
+                if file_item.get("type") == "csv":
+                    print(f"   ✅ Uloženo {len(chunks)} záznamů z CSV tabulky.")
 
             print("🎉 Hotovo! Všechna data jsou v databázi.")
         else:
-            print("⚠️ Žádné relevantní soubory (PDF/DOCX) nenalezeny.")
+            print("⚠️ Žádné relevantní soubory (PDF/DOCX/CSV) nenalezeny.")
