@@ -3,6 +3,7 @@ import numpy as np
 import json
 from config import DB_HOST, DB_NAME, DB_USER, DB_PASSWORD
 
+
 def get_db_connection():
     return pymysql.connect(
         host=DB_HOST,
@@ -12,37 +13,18 @@ def get_db_connection():
         autocommit=True
     )
 
-def init_db():
-    """Vytvoří tabulku, pokud neexistuje (pro jistotu)."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS embeddings (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            title VARCHAR(255),
-            chunk TEXT,
-            embedding JSON,
-            source_file VARCHAR(255)
-        )
-    """)
-    conn.close()
 
-# Vložit nový záznam (použije ingest.py)
-def insert_embedding_to_db(title, chunk, embedding, source_file):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    embedding_json = json.dumps(embedding.tolist())
-    cursor.execute(
-        "INSERT INTO embeddings (title, chunk, embedding, source_file) VALUES (%s, %s, %s, %s)",
-        (title, chunk, embedding_json, source_file)
-    )
-    conn.close()
-
-# Načíst všechny záznamy (použije application.py)
+# --- STANDARDNÍ ČTENÍ (PRO CHATBOTA) ---
+# Chatbot vždy čte z tabulky 'embeddings' (bez ohledu na to, co se děje na pozadí)
 def load_embeddings_from_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Načítáme i source_file pro lepší citace
+    # Zkontrolujeme, jestli tabulka existuje (pro první spuštění)
+    cursor.execute("SHOW TABLES LIKE 'embeddings'")
+    if not cursor.fetchone():
+        conn.close()
+        return []
+
     cursor.execute("SELECT id, title, chunk, embedding, source_file FROM embeddings")
     rows = cursor.fetchall()
     conn.close()
@@ -53,7 +35,7 @@ def load_embeddings_from_db():
         try:
             embedding_array = np.array(json.loads(embedding_str))
         except (json.JSONDecodeError, TypeError):
-            continue # Přeskočíme vadné záznamy
+            continue
 
         embeddings.append({
             "id": record_id,
@@ -65,9 +47,58 @@ def load_embeddings_from_db():
 
     return embeddings
 
-# Vymazání databáze před novým nahráním (volitelné)
-def clear_database():
+
+# --- LOGIKA PRO ZERO-DOWNTIME INGEST ---
+
+def init_next_table():
+    """Vytvoří prázdnou stínovou tabulku 'embeddings_next'."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("TRUNCATE TABLE embeddings")
+
+    # 1. Smažeme případné pozůstatky z minulého nepovedeného běhu
+    cursor.execute("DROP TABLE IF EXISTS embeddings_next")
+
+    # 2. Vytvoříme novou tabulku se stejnou strukturou
+    cursor.execute("""
+        CREATE TABLE embeddings_next (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            title VARCHAR(255),
+            chunk TEXT,
+            embedding JSON,
+            source_file VARCHAR(255)
+        )
+    """)
+    conn.close()
+
+
+def insert_into_next_table(title, chunk, embedding, source_file):
+    """Vkládá data do STÍNOVÉ tabulky."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    embedding_json = json.dumps(embedding.tolist())
+    cursor.execute(
+        "INSERT INTO embeddings_next (title, chunk, embedding, source_file) VALUES (%s, %s, %s, %s)",
+        (title, chunk, embedding_json, source_file)
+    )
+    conn.close()
+
+
+def swap_tables_atomic():
+    """Provede bleskové prohození tabulek."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Zkontrolujeme, jestli existuje ostrá tabulka 'embeddings'
+    cursor.execute("SHOW TABLES LIKE 'embeddings'")
+    exists = cursor.fetchone()
+
+    if exists:
+        # Pokud existuje, provedeme rotaci: Live -> Backup, Next -> Live
+        cursor.execute("DROP TABLE IF EXISTS embeddings_backup")
+        cursor.execute("RENAME TABLE embeddings TO embeddings_backup, embeddings_next TO embeddings")
+        cursor.execute("DROP TABLE embeddings_backup")
+    else:
+        # Pokud je to úplně první běh, jen přejmenujeme Next -> Live
+        cursor.execute("RENAME TABLE embeddings_next TO embeddings")
+
     conn.close()
