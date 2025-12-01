@@ -28,69 +28,92 @@ def cosine_similarity(v1, v2):
     return np.dot(v1, v2) / (norm_v1 * norm_v2)
 
 
+def is_subject_code(word):
+    """
+    Rozpozná, zda slovo vypadá jako kód předmětu (např. ALG1, OA1, KP/ALG).
+    Vyloučí běžná slova jako 'kontakt', 'katedra', 'na'.
+    """
+    # Musí mít 2-8 znaků
+    if not (2 <= len(word) <= 8):
+        return False
+
+    # Musí obsahovat alespoň jedno velké písmeno nebo číslo (pokud je zadáno velkými)
+    # Ale my dostaneme 'word' už z tokenizace, takže musíme být opatrní.
+
+    # Seznam zakázaných slov (běžná slova, která by se mohla splést s kódy)
+    stopwords = {'pro', 'kde', 'kdy', 'jak', 'co', 'na', 'do', 'se', 'ze', 'ke', 've',
+                 'test', 'info', 'data', 'stag', 'fim', 'uhk', 'pan', 'pani',
+                 'doc', 'prof', 'ing', 'mgr', 'bc', 'phd', 'kontakt', 'vedouci'}
+
+    if word.lower() in stopwords:
+        return False
+
+    # Musí obsahovat alespoň jedno písmeno (ne jen čísla, i když na FIMu jsou i kódy s čísly)
+    # Ale hlavně: Kódy bývají 'OA1', 'ALG', '4IT101'.
+    # Pokud je to jen "Dominik", tak to projde jako validní slovo, ale my chceme jen KÓDY.
+
+    # Zkusíme přísnější pravidlo:
+    # 1. Obsahuje číslo? (OA1, 4IT) -> JASNÝ KÓD
+    if any(char.isdigit() for char in word):
+        return True
+
+    # 2. Je to celé velkými písmeny a má to 2-5 znaků? (ALG, ZPRO) -> ASI KÓD
+    # (Tady spoléháme na to, že uživatel napíše ALG, ne alg. Pokud napíše alg, boostneme to taky, nevadí).
+    if word.isalpha() and len(word) <= 5:
+        return True
+
+    return False
+
+
 def find_top_k_matches(query_embedding, embeddings, query_text, k=3):
-    """
-    Najde K nejlepších shod s podporou Keyword Boostingu.
-    Řeší problém, kdy 'OA1' a 'OA2' mají podobný embedding, ale uživatel chce přesně jeden.
-    """
+    """Najde K nejlepších shod s CHYTRÝM boostem pro kódy."""
     if not embeddings:
         return []
 
-    # Rozbijeme dotaz na slova (tokeny) pro keyword search
-    # ZMĚNA: Povolíme i slova od 2 znaků (např. "AJ", "TV", "C#")
-    # Používáme r'\w+' což bere alfanumerické znaky
-    query_tokens = set(word.lower() for word in re.findall(r'\w+', query_text) if len(word) >= 2)
+    # Rozbijeme dotaz na slova. Zachováme původní velikost písmen pro detekci kódů!
+    raw_tokens = re.findall(r'\b\w+\b', query_text)
 
     scored_embeddings = []
     for item in embeddings:
-        # 1. Základní skóre (Cosine Similarity - Sémantika)
+        # 1. Základní skóre (Sémantika)
         score = cosine_similarity(query_embedding, item["vector"])
 
-        # 2. Keyword Boost (Tvrdá shoda kódů)
-        item_title_lower = item["title"].lower()
+        # 2. Smart Keyword Boost
+        item_title = item["title"]  # Původní title s velkými písmeny
 
         boost = 0.0
-        for token in query_tokens:
-            # Regex \bTOKEN\b zajistí, že najdeme "OA1" i v textu "(OA1)" nebo "OA1,",
-            # ale nenajdeme ho v "OA12" (což je jiné).
-            # Závorka '(' se pro regex chová jako hranice slova, takže to funguje perfektně.
-            if re.search(r'\b' + re.escape(token) + r'\b', item_title_lower):
-                boost += 0.4  # Velký boost! (0.4 je ve světě embeddingů hodně)
+        for token in raw_tokens:
+            # Aplikujeme boost JENOM pokud to vypadá jako kód předmětu
+            if is_subject_code(token):
+                # Hledáme přesnou shodu kódu v titulku (case-insensitive, ale boundary-sensitive)
+                # \bTOKEN\b zajistí, že ALG nenajde v "Algebra", ale najde v "(ALG)"
+                if re.search(r'\b' + re.escape(token) + r'\b', item_title, re.IGNORECASE):
+                    # Je to kód a je v nadpisu! Boost!
+                    print(f"🚀 Boostuji: {item['title']} kvůli kódu '{token}'")
+                    boost += 0.5  # Masivní boost
 
         final_score = score + boost
         scored_embeddings.append((final_score, item))
 
-    # Seřadit sestupně podle finálního skóre
     scored_embeddings.sort(key=lambda x: x[0], reverse=True)
-
-    # Vrátit top K
-    # Práh 0.2 stačí, boostnuté dokumenty budou mít třeba 1.1, takže projdou snadno
     return [item for score, item in scored_embeddings[:k] if score > 0.2]
 
 
 def rewrite_query_for_search(user_query):
-    """LLM přepis dotazu pro lepší vyhledávání."""
+    """LLM přepis dotazu."""
     system_prompt = """
     Jsi expertní AI pro optimalizaci vyhledávacích dotazů v univerzitní databázi (RAG).
-    Tvým úkolem je přeformulovat dotaz studenta tak, aby byl co nejlepší pro sémantické vyhledávání.
-
-    Zdroje obsahují:
-    1. Informace o předmětech (kódy např. ALG1, OA1, ZPRO; názvy, garanti, kredity).
-    2. Směrnice a vyhlášky.
 
     Pravidla:
-    - Pokud dotaz obsahuje zkratku předmětu (např. OA1), MUSÍŠ ji zachovat v přesném znění!
-    - Rozšiř dotaz o synonyma (např. "kdy odevzdat" -> "termín odevzdání").
-    - Odstraň zdvořilostní fráze.
+    - Pokud dotaz obsahuje zkratku (např. OA1, ZPRO), ZACHOVEJ JI v přesném znění!
+    - Pokud je dotaz obecný ("kdy je zápis"), rozšiř ho o klíčová slova ("harmonogram", "termín").
+    - Odstraň balast.
     """
 
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
     data = {
         "model": "gpt-4o",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Dotaz: {user_query}"}
-        ],
+        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_query}],
         "temperature": 0
     }
 
@@ -100,7 +123,6 @@ def rewrite_query_for_search(user_query):
             return response.json()["choices"][0]["message"]["content"].strip()
     except Exception:
         pass
-
     return user_query
 
 
@@ -116,7 +138,6 @@ def get_response_from_llm(context_list, query):
     Jsi nápomocný AI asistent 'Sofim' pro Studijní oddělení FIM UHK. 
     Odpovídej na otázky studentů POUZE na základě poskytnutého kontextu.
     Pokud odpověď v kontextu není, slušně řekni, že tuto informaci nemáš.
-    Odpovídej stručně, jasně a přátelsky. Používej formátování pro lepší čitelnost.
     """
 
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
@@ -131,11 +152,10 @@ def get_response_from_llm(context_list, query):
 
     try:
         response = requests.post(LLM_API_URL, headers=headers, json=data)
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"].strip()
+        if response.status_code == 200: return response.json()["choices"][0]["message"]["content"].strip()
     except Exception:
         pass
-    return "Omlouvám se, chyba API."
+    return "Chyba API."
 
 
 # --- Routes ---
@@ -144,39 +164,28 @@ def get_response_from_llm(context_list, query):
 def api_chat():
     data = request.get_json()
     user_query = data.get("query")
+    if not user_query: return jsonify({"error": "Empty query"}), 400
 
-    if not user_query:
-        return jsonify({"error": "Empty query"}), 400
-
-    # 1. LLM Rewrite (Sémantika)
     search_query = rewrite_query_for_search(user_query)
-
-    # 2. Embedding
     query_embedding = get_query_embedding(search_query)
     embeddings = load_embeddings_from_db()
 
-    # 3. Hybridní Search (Sémantika + Regex Boost pro zkratky)
-    # Posíláme 'search_query', protože LLM tam tu zkratku zachová/zvýrazní
-    best_matches = find_top_k_matches(query_embedding, embeddings, search_query, k=3)
+    # Hledání s chytrým boostem (předáváme původní dotaz pro detekci kódů)
+    best_matches = find_top_k_matches(query_embedding, embeddings, user_query, k=3)
 
     response_sources = []
     response_text = ""
 
     if best_matches:
         response_text = get_response_from_llm(best_matches, user_query)
-
-        seen_sources = set()
+        seen = set()
         for match in best_matches:
-            # Prioritně zobrazujeme Title (např. "Předmět: ...")
-            source_to_show = match.get('title')
-            if not source_to_show:
-                source_to_show = match.get('source', 'Neznámý zdroj')
-
-            if source_to_show and source_to_show not in seen_sources:
-                response_sources.append(source_to_show)
-                seen_sources.add(source_to_show)
+            src = match.get('title') or match.get('source', 'Zdroj')
+            if src not in seen:
+                response_sources.append(src)
+                seen.add(src)
     else:
-        response_text = "Bohužel k tomuto dotazu nemám v databázi žádné informace. Zkuste se zeptat jinak nebo kontaktujte studijní oddělení."
+        response_text = "Bohužel k tomuto dotazu nemám v databázi žádné informace."
 
     return jsonify({"response": response_text, "sources": response_sources})
 
