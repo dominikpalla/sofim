@@ -34,23 +34,63 @@ def find_top_k_matches(query_embedding, embeddings, k=3):
 
     scored_embeddings = []
     for item in embeddings:
-        # Předpokládáme, že item je slovník z load_embeddings_from_db
-        # {'id': ..., 'title': ..., 'text': ..., 'vector': ..., 'source': ...}
         score = cosine_similarity(query_embedding, item["vector"])
         scored_embeddings.append((score, item))
 
     # Seřadit sestupně podle skóre
     scored_embeddings.sort(key=lambda x: x[0], reverse=True)
 
-    # Vrátit top K (jen pokud je skóre aspoň trochu relevantní)
-    return [item for score, item in scored_embeddings[:k] if score > 0.2]  # Zvedl jsem práh na 0.2 pro lepší relevanci
+    # Vrátit top K
+    return [item for score, item in scored_embeddings[:k] if score > 0.2]
+
+
+def rewrite_query_for_search(user_query):
+    """
+    Přepíše dotaz uživatele tak, aby byl optimalizovaný pro sémantické vyhledávání.
+    Doplní kontext, klíčová slova a synonyma.
+    """
+    print(f"🔄 Původní dotaz: {user_query}")
+
+    system_prompt = """
+    Jsi expertní AI pro optimalizaci vyhledávacích dotazů v univerzitní databázi (RAG).
+    Tvým úkolem je přeformulovat dotaz studenta tak, aby byl co nejlepší pro sémantické vyhledávání (embeddingy).
+
+    Zdroje obsahují:
+    1. Informace o předmětech (kódy, názvy, garanti, kredity, anotace).
+    2. Směrnice a vyhlášky (termíny, pravidla, omluvy).
+
+    Pravidla:
+    - Pokud dotaz zmiňuje název předmětu, přidej slova jako "předmět", "sylabus", "garant", "kredity".
+    - Pokud je dotaz na směrnici, přidej formální termíny (např. "omluvenka" -> "omluva z výuky", "lékařské potvrzení").
+    - Odstraň balast ("ahoj", "prosím tě", "chtěl bych vědět").
+    - Výstup musí být POUZE vylepšený vyhledávací dotaz, nic jiného.
+    """
+
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    data = {
+        "model": "gpt-4o",  # Nebo gpt-4o-mini pro rychlost
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Dotaz: {user_query}"}
+        ],
+        "temperature": 0  # Chceme deterministický výstup
+    }
+
+    try:
+        response = requests.post(LLM_API_URL, headers=headers, json=data)
+        if response.status_code == 200:
+            optimized_query = response.json()["choices"][0]["message"]["content"].strip()
+            print(f"✨ Optimalizovaný dotaz: {optimized_query}")
+            return optimized_query
+    except Exception as e:
+        print(f"⚠️ Chyba při optimalizaci dotazu: {e}")
+
+    return user_query  # Fallback na původní dotaz
 
 
 def get_response_from_llm(context_list, query):
-    # Sestavení kontextu z více chunků
     context_text = ""
     for idx, item in enumerate(context_list):
-        # Zde používáme title i source_file pro kontext LLM
         source_info = item.get('source', 'Neznámý soubor')
         title_info = item.get('title', 'Bez názvu')
         context_text += f"\n--- ZDROJ {idx + 1}: {title_info} (Soubor: {source_info}) ---\n"
@@ -59,19 +99,18 @@ def get_response_from_llm(context_list, query):
     system_prompt = """
     Jsi nápomocný AI asistent 'Sofim' pro Studijní oddělení FIM UHK. 
     Odpovídej na otázky studentů POUZE na základě poskytnutého kontextu.
-    Pokud odpověď v kontextu není, slušně řekni, že tuto informaci nemáš, nevymýšlej si.
-    Odpovídej stručně, jasně a přátelsky (tykání/vykání dle dotazu, defaultně vykání).
-    Používej formátování (tučné písmo, odrážky), aby byla odpověď přehledná.
+    Pokud odpověď v kontextu není, slušně řekni, že tuto informaci nemáš.
+    Odpovídej stručně, jasně a přátelsky.
     """
 
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
     data = {
-        "model": "gpt-4o",  # Nebo gpt-4o-mini
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Kontext:\n{context_text}\n\nDotaz studenta: {query}"}
         ],
-        "temperature": 0.3  # Nižší teplota pro faktickou přesnost
+        "temperature": 0.3
     }
 
     try:
@@ -79,11 +118,9 @@ def get_response_from_llm(context_list, query):
         if response.status_code == 200:
             return response.json()["choices"][0]["message"]["content"].strip()
         else:
-            print(f"Chyba LLM API: {response.text}")
-            return "Omlouvám se, momentálně nejsem ve spojení se svým mozkem (chyba API)."
-    except Exception as e:
-        print(f"Chyba spojení s LLM: {e}")
-        return "Omlouvám se, nastala chyba při komunikaci."
+            return "Omlouvám se, chyba API."
+    except Exception:
+        return "Omlouvám se, chyba komunikace."
 
 
 # --- Routes ---
@@ -91,35 +128,30 @@ def get_response_from_llm(context_list, query):
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     data = request.get_json()
-    query = data.get("query")
+    user_query = data.get("query")
 
-    if not query:
+    if not user_query:
         return jsonify({"error": "Empty query"}), 400
 
-    query_embedding = get_query_embedding(query)
+    # 1. KROK: Přeformulování dotazu pro lepší vyhledávání
+    search_query = rewrite_query_for_search(user_query)
 
-    # Načíst DB (v produkci by se to dělalo jen jednou při startu appky a drželo v paměti,
-    # nebo by se použila vektorová DB)
+    # 2. KROK: Hledání v DB pomocí VYLEPŠENÉHO dotazu
+    query_embedding = get_query_embedding(search_query)
     embeddings = load_embeddings_from_db()
-
-    # Najít nejlepší shody (Top-3)
     best_matches = find_top_k_matches(query_embedding, embeddings, k=3)
 
     response_sources = []
     response_text = ""
 
     if best_matches:
-        response_text = get_response_from_llm(best_matches, query)
+        # 3. KROK: Odpověď generujeme na původní dotaz uživatele (aby to znělo přirozeně),
+        # ale s kontextem nalezeným pomocí vylepšeného dotazu.
+        response_text = get_response_from_llm(best_matches, user_query)
 
-        # --- ZPRACOVÁNÍ ZDROJŮ PRO UI ---
         seen_sources = set()
         for match in best_matches:
-            # ZDE JE TA ZMĚNA:
-            # Chceš v UI vidět "Předmět: Algoritmy" (title) nebo "export.csv" (source)?
-            # Pokud chceš title (což je hezčí pro předměty):
             source_to_show = match.get('title')
-
-            # Pokud title není (nebo je prázdný), zkusíme source_file
             if not source_to_show:
                 source_to_show = match.get('source', 'Neznámý zdroj')
 
@@ -134,8 +166,6 @@ def api_chat():
 
 @app.route("/", methods=["GET", "POST"])
 def home():
-    # Tato route slouží jen pro prvotní načtení stránky (GET)
-    # POST logika je přesunuta do /api/chat pro AJAX
     return render_template("index.html")
 
 
