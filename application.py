@@ -155,7 +155,7 @@ def get_response_from_llm(context_list, query):
         if response.status_code == 200: return response.json()["choices"][0]["message"]["content"].strip()
     except Exception:
         return f"Chyba API (Status {response.status_code}): {response.text}"
-    return "Chyba API."
+    return f"Chyba API (Status {response.status_code}): {response.text}"
 
 
 # --- Routes ---
