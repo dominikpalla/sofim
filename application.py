@@ -4,6 +4,7 @@ from flask import Flask, request, render_template, jsonify
 import requests
 from database import load_embeddings_from_db
 from config import OPENAI_API_KEY, EMBEDDING_MODEL, OPENAI_EMBEDDING_URL, LLM_API_URL
+import re
 
 app = Flask(__name__)
 
@@ -27,65 +28,80 @@ def cosine_similarity(v1, v2):
     return np.dot(v1, v2) / (norm_v1 * norm_v2)
 
 
-def find_top_k_matches(query_embedding, embeddings, k=3):
-    """Najde K nejlepších shod v databázi."""
+def find_top_k_matches(query_embedding, embeddings, query_text, k=3):
+    """
+    Najde K nejlepších shod s podporou Keyword Boostingu.
+    Řeší problém, kdy 'OA1' a 'OA2' mají podobný embedding, ale uživatel chce přesně jeden.
+    """
     if not embeddings:
         return []
 
+    # Rozbijeme dotaz na slova (tokeny) pro keyword search
+    # ZMĚNA: Povolíme i slova od 2 znaků (např. "AJ", "TV", "C#")
+    # Používáme r'\w+' což bere alfanumerické znaky
+    query_tokens = set(word.lower() for word in re.findall(r'\w+', query_text) if len(word) >= 2)
+
     scored_embeddings = []
     for item in embeddings:
+        # 1. Základní skóre (Cosine Similarity - Sémantika)
         score = cosine_similarity(query_embedding, item["vector"])
-        scored_embeddings.append((score, item))
 
-    # Seřadit sestupně podle skóre
+        # 2. Keyword Boost (Tvrdá shoda kódů)
+        item_title_lower = item["title"].lower()
+
+        boost = 0.0
+        for token in query_tokens:
+            # Regex \bTOKEN\b zajistí, že najdeme "OA1" i v textu "(OA1)" nebo "OA1,",
+            # ale nenajdeme ho v "OA12" (což je jiné).
+            # Závorka '(' se pro regex chová jako hranice slova, takže to funguje perfektně.
+            if re.search(r'\b' + re.escape(token) + r'\b', item_title_lower):
+                boost += 0.4  # Velký boost! (0.4 je ve světě embeddingů hodně)
+
+        final_score = score + boost
+        scored_embeddings.append((final_score, item))
+
+    # Seřadit sestupně podle finálního skóre
     scored_embeddings.sort(key=lambda x: x[0], reverse=True)
 
     # Vrátit top K
+    # Práh 0.2 stačí, boostnuté dokumenty budou mít třeba 1.1, takže projdou snadno
     return [item for score, item in scored_embeddings[:k] if score > 0.2]
 
 
 def rewrite_query_for_search(user_query):
-    """
-    Přepíše dotaz uživatele tak, aby byl optimalizovaný pro sémantické vyhledávání.
-    Doplní kontext, klíčová slova a synonyma.
-    """
-    print(f"🔄 Původní dotaz: {user_query}")
-
+    """LLM přepis dotazu pro lepší vyhledávání."""
     system_prompt = """
     Jsi expertní AI pro optimalizaci vyhledávacích dotazů v univerzitní databázi (RAG).
-    Tvým úkolem je přeformulovat dotaz studenta tak, aby byl co nejlepší pro sémantické vyhledávání (embeddingy).
+    Tvým úkolem je přeformulovat dotaz studenta tak, aby byl co nejlepší pro sémantické vyhledávání.
 
     Zdroje obsahují:
-    1. Informace o předmětech (kódy, názvy, garanti, kredity, anotace).
-    2. Směrnice a vyhlášky (termíny, pravidla, omluvy).
+    1. Informace o předmětech (kódy např. ALG1, OA1, ZPRO; názvy, garanti, kredity).
+    2. Směrnice a vyhlášky.
 
     Pravidla:
-    - Pokud dotaz zmiňuje název předmětu, přidej slova jako "předmět", "sylabus", "garant", "kredity".
-    - Pokud je dotaz na směrnici, přidej formální termíny (např. "omluvenka" -> "omluva z výuky", "lékařské potvrzení").
-    - Odstraň balast ("ahoj", "prosím tě", "chtěl bych vědět").
-    - Výstup musí být POUZE vylepšený vyhledávací dotaz, nic jiného.
+    - Pokud dotaz obsahuje zkratku předmětu (např. OA1), MUSÍŠ ji zachovat v přesném znění!
+    - Rozšiř dotaz o synonyma (např. "kdy odevzdat" -> "termín odevzdání").
+    - Odstraň zdvořilostní fráze.
     """
 
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
     data = {
-        "model": "gpt-4o",  # Nebo gpt-4o-mini pro rychlost
+        "model": "gpt-4o",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Dotaz: {user_query}"}
         ],
-        "temperature": 0  # Chceme deterministický výstup
+        "temperature": 0
     }
 
     try:
         response = requests.post(LLM_API_URL, headers=headers, json=data)
         if response.status_code == 200:
-            optimized_query = response.json()["choices"][0]["message"]["content"].strip()
-            print(f"✨ Optimalizovaný dotaz: {optimized_query}")
-            return optimized_query
-    except Exception as e:
-        print(f"⚠️ Chyba při optimalizaci dotazu: {e}")
+            return response.json()["choices"][0]["message"]["content"].strip()
+    except Exception:
+        pass
 
-    return user_query  # Fallback na původní dotaz
+    return user_query
 
 
 def get_response_from_llm(context_list, query):
@@ -100,7 +116,7 @@ def get_response_from_llm(context_list, query):
     Jsi nápomocný AI asistent 'Sofim' pro Studijní oddělení FIM UHK. 
     Odpovídej na otázky studentů POUZE na základě poskytnutého kontextu.
     Pokud odpověď v kontextu není, slušně řekni, že tuto informaci nemáš.
-    Odpovídej stručně, jasně a přátelsky.
+    Odpovídej stručně, jasně a přátelsky. Používej formátování pro lepší čitelnost.
     """
 
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
@@ -117,10 +133,9 @@ def get_response_from_llm(context_list, query):
         response = requests.post(LLM_API_URL, headers=headers, json=data)
         if response.status_code == 200:
             return response.json()["choices"][0]["message"]["content"].strip()
-        else:
-            return "Omlouvám se, chyba API."
     except Exception:
-        return "Omlouvám se, chyba komunikace."
+        pass
+    return "Omlouvám se, chyba API."
 
 
 # --- Routes ---
@@ -133,24 +148,26 @@ def api_chat():
     if not user_query:
         return jsonify({"error": "Empty query"}), 400
 
-    # 1. KROK: Přeformulování dotazu pro lepší vyhledávání
+    # 1. LLM Rewrite (Sémantika)
     search_query = rewrite_query_for_search(user_query)
 
-    # 2. KROK: Hledání v DB pomocí VYLEPŠENÉHO dotazu
+    # 2. Embedding
     query_embedding = get_query_embedding(search_query)
     embeddings = load_embeddings_from_db()
-    best_matches = find_top_k_matches(query_embedding, embeddings, k=3)
+
+    # 3. Hybridní Search (Sémantika + Regex Boost pro zkratky)
+    # Posíláme 'search_query', protože LLM tam tu zkratku zachová/zvýrazní
+    best_matches = find_top_k_matches(query_embedding, embeddings, search_query, k=3)
 
     response_sources = []
     response_text = ""
 
     if best_matches:
-        # 3. KROK: Odpověď generujeme na původní dotaz uživatele (aby to znělo přirozeně),
-        # ale s kontextem nalezeným pomocí vylepšeného dotazu.
         response_text = get_response_from_llm(best_matches, user_query)
 
         seen_sources = set()
         for match in best_matches:
+            # Prioritně zobrazujeme Title (např. "Předmět: ...")
             source_to_show = match.get('title')
             if not source_to_show:
                 source_to_show = match.get('source', 'Neznámý zdroj')
