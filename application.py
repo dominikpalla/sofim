@@ -49,7 +49,7 @@ def get_response_from_llm(context_list, query):
     # Sestavení kontextu z více chunků
     context_text = ""
     for idx, item in enumerate(context_list):
-        context_text += f"\n--- ZDROJ {idx + 1}: {item['title']} ({item['source']}) ---\n"
+        context_text += f"\n--- ZDROJ {idx + 1}: {item['title']} ({item['title']}) ---\n"
         context_text += item['text'] + "\n"
 
     system_prompt = """
@@ -125,7 +125,7 @@ def home():
             embeddings = load_embeddings_from_db()
 
             # Najít nejlepší shody (Top-3)
-            best_matches = find_top_k_matches(query_embedding, embeddings, k=3)
+            best_matches = find_top_k_matches(query_embedding, embeddings, k=5)
 
             if best_matches:
                 response = get_response_from_llm(best_matches, query)
