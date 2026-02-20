@@ -45,9 +45,12 @@ def scrape_uhk_page(url):
 
         if response.status_code != 200:
             print(f"   ❌ Chyba HTTP {response.status_code}")
-            return None, []
+            return None, [], ""
 
         soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Pokus o vytažení rozumného titulku stránky pro source_file
+        page_title = soup.title.string.strip() if soup.title else "Webová stránka"
 
         pdf_urls = []
         for a_tag in soup.find_all('a', href=True):
@@ -84,6 +87,7 @@ def scrape_uhk_page(url):
             "temperature": 0.0
         }
 
+        # Timeout 180s pro bezpečné extrahování obřího HTML
         llm_response = requests.post("https://api.openai.com/v1/chat/completions", headers=llm_headers, json=data,
                                      timeout=180)
 
@@ -92,9 +96,9 @@ def scrape_uhk_page(url):
 
             if len(clean_text) < 20:
                 print("   ⚠️ AI z této stránky nedostala žádný smysluplný text.")
-                return None, pdf_urls
+                return None, pdf_urls, page_title
 
-            return clean_text, pdf_urls
+            return clean_text, pdf_urls, page_title
         else:
             raise Exception(f"Chyba OpenAI při extrakci HTML (HTTP {llm_response.status_code}): {llm_response.text}")
 
@@ -109,7 +113,6 @@ def process_pdf_from_url(pdf_url, depth=0):
     Stáhne PDF. Pokud narazí na HTML detail dokumentu, zkusí v něm najít skutečné PDF.
     MAX hloubka zanoření (depth) = 1, aby se nezacyklil.
     """
-    # Pokud se zanořujeme už podruhé do HTML, raději to ukončíme
     if depth > 1:
         return None
 
@@ -208,11 +211,15 @@ def read_csv_smart(fh):
     return None
 
 
-# --- 3. Chunking funkce ---
+# --- 3. Chunking funkce (GENERÁTOR) ---
 
 def semantic_chunking(text, filename):
+    """
+    Inteligentní řezání textu pomocí GPT-4o-mini.
+    Upraveno na YIELD (Generátor) - každý zpracovaný blok se okamžitě vrací do hlavní smyčky k uložení do DB!
+    """
     if not text or len(text.strip()) < 10:
-        return []
+        return
 
     print(f"🧠 Sémantické řezání obsahu: {filename}...")
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
@@ -220,11 +227,11 @@ def semantic_chunking(text, filename):
     chunk_size = 12000
     text_blocks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
-    all_extracted_chunks = []
+    yielded_any = False
 
     for idx, block in enumerate(text_blocks):
         if len(text_blocks) > 1:
-            print(f"   ⏳ Zpracovávám část {idx + 1}/{len(text_blocks)}...")
+            print(f"   ⏳ Zpracovávám část {idx + 1}/{len(text_blocks)} dokumentu {filename}...")
 
         prompt = f"""
         Jsi expertní analytik. Rozděl text na logické celky (chunky).
@@ -252,21 +259,24 @@ def semantic_chunking(text, filename):
                 content = result["choices"][0]["message"]["content"]
                 json_content = json.loads(content)
 
+                chunks_to_yield = []
                 if "chunks" in json_content:
-                    all_extracted_chunks.extend(json_content["chunks"])
+                    chunks_to_yield = json_content["chunks"]
                 elif "items" in json_content:
-                    all_extracted_chunks.extend(json_content["items"])
+                    chunks_to_yield = json_content["items"]
+
+                for c in chunks_to_yield:
+                    yielded_any = True
+                    yield c
             else:
                 print(f"   ⚠️ API Error u části {idx + 1} (HTTP {response.status_code}): {response.text}")
 
         except Exception as e:
             print(f"   ⚠️ Chyba AI chunkingu u části {idx + 1}: {str(e)}")
 
-    if not all_extracted_chunks:
-        print("   ⚠️ Sémantický chunking selhal nebo nevrátil nic.")
-        return []
-
-    return all_extracted_chunks
+    if not yielded_any:
+        print("   ⚠️ Sémantický chunking nevrátil nic. Používám hrubý fallback.")
+        yield {"title": f"Obsah z {filename}", "content": text[:10000]}
 
 
 def csv_row_chunking(df, filename):
@@ -349,11 +359,11 @@ def run_ingest(mode="all"):
                 print(f"🌍 Nalezeno {total_urls} URL adres k indexaci.")
                 for idx, url in enumerate(urls, 1):
                     try:
-                        web_text, pdf_links = scrape_uhk_page(url)
+                        web_text, pdf_links, page_title = scrape_uhk_page(url)
 
                         if web_text:
-                            chunks = semantic_chunking(web_text, f"Web: {url}")
-                            for chunk in chunks:
+                            # Průběžná iterace přes generátor
+                            for chunk in semantic_chunking(web_text, f"Web: {url}"):
                                 title = chunk.get("title", "Webová stránka").strip()
                                 content = chunk.get("content", "").strip()
 
@@ -362,8 +372,9 @@ def run_ingest(mode="all"):
 
                                 emb = get_embedding(f"URL: {url}\n{content}")
                                 if emb is not None:
-                                    insert_into_next_table(title, content, emb, url)
-                                    print(f"   💾 Web uložen: {title[:40]}...")
+                                    # Vkládá: title, chunk, embedding, source_file=page_title, source_url=url
+                                    insert_into_next_table(title, content, emb, page_title, url)
+                                    print(f"   💾 Průběžně uloženo do DB: {title[:40]}...")
                                     success_count += 1
 
                         if pdf_links:
@@ -371,8 +382,10 @@ def run_ingest(mode="all"):
                             for pdf_url in pdf_links:
                                 pdf_text = process_pdf_from_url(pdf_url)
                                 if pdf_text:
-                                    chunks = semantic_chunking(pdf_text, f"PDF: {pdf_url.split('/')[-1]}")
-                                    for chunk in chunks:
+                                    filename_short = pdf_url.split('/')[-1]
+
+                                    # Průběžná iterace přes generátor pro PDF
+                                    for chunk in semantic_chunking(pdf_text, f"PDF: {filename_short}"):
                                         title = chunk.get("title", "PDF Dokument").strip()
                                         content = chunk.get("content", "").strip()
 
@@ -381,7 +394,9 @@ def run_ingest(mode="all"):
 
                                         emb = get_embedding(f"Zdroj PDF: {pdf_url}\n{content}")
                                         if emb is not None:
-                                            insert_into_next_table(title, content, emb, pdf_url)
+                                            # Vkládá: title, chunk, embedding, source_file=filename_short, source_url=pdf_url
+                                            insert_into_next_table(title, content, emb, filename_short, pdf_url)
+                                            print(f"   💾 Průběžně uloženo do DB: {title[:40]}...")
                                             success_count += 1
 
                     except Exception as e:
@@ -410,7 +425,8 @@ def run_ingest(mode="all"):
                             try:
                                 emb = get_embedding(chunk["content"])
                                 if emb is not None:
-                                    insert_into_next_table(chunk["title"], chunk["content"], emb, "STAG Export")
+                                    # Vkládá: title, chunk, embedding, source_file="STAG Export", source_url=""
+                                    insert_into_next_table(chunk["title"], chunk["content"], emb, "STAG Export", "")
                                     success_count += 1
                             except Exception as e:
                                 log_sync_error("CSV", f"Chyba na řádku {idx}: {str(e)}")

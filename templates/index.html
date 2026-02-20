@@ -18,11 +18,11 @@
         </div>
 
         <div class="warning-banner">
-    <i class="fas fa-info-circle"></i> <span>
-        Toto je testovací verze. Chatbot se stále učí a může dělat chyby.
-        Našli jste nepřesnost? <a href="https://forms.gle/21QGh33wDoACydZC8" target="_blank" class="feedback-link">Dejte nám vědět</a>.
-    </span>
-</div>
+            <i class="fas fa-info-circle"></i> <span>
+                Toto je testovací verze. Chatbot se stále učí a může dělat chyby.
+                Našli jste nepřesnost? <a href="https://forms.gle/21QGh33wDoACydZC8" target="_blank" class="feedback-link">Dejte nám vědět</a>.
+            </span>
+        </div>
 
         <div class="chat-messages" id="chat-box">
             <div class="message bot">
@@ -32,7 +32,7 @@
                 </div>
             </div>
 
-            <div class="typing-indicator" id="loading">
+            <div class="typing-indicator" id="loading" style="display: none;">
                 <span></span><span></span><span></span>
             </div>
         </div>
@@ -40,7 +40,8 @@
         <form class="chat-input-area" id="chat-form">
             <input type="text" id="user-input" placeholder="Napiš zprávu..." autocomplete="off" required>
             <button type="submit">
-                <i class="fas fa-paper-plane"></i> </button>
+                <i class="fas fa-paper-plane"></i>
+            </button>
         </form>
     </div>
 
@@ -128,13 +129,26 @@
             // Pokud je to bot a má zdroje, přidáme patičku s ikonkami
             if (sender === 'bot' && sources && sources.length > 0) {
                 innerHTML += `<div class="sources-container">`;
-                sources.forEach(source => {
-                    // Vytvoření položky zdroje s tooltipem (data-tooltip)
-                    innerHTML += `
-                        <div class="source-item" data-tooltip="${source}">
-                            <i class="far fa-file-alt"></i> <span>Zdroj</span>
-                        </div>
-                    `;
+                sources.forEach(sourceObj => {
+                    // Backend teď vrací objekty: { name: "...", url: "..." }
+                    const sourceName = sourceObj.name;
+                    const sourceUrl = sourceObj.url;
+
+                    if (sourceUrl && sourceUrl.trim() !== "") {
+                        // Pokud máme URL, uděláme proklikávací odkaz
+                        innerHTML += `
+                            <a href="${sourceUrl}" target="_blank" class="source-item" data-tooltip="${sourceName}" style="text-decoration: none; color: inherit;">
+                                <i class="fas fa-external-link-alt"></i> <span>Zdroj</span>
+                            </a>
+                        `;
+                    } else {
+                        // Pokud URL nemáme (např. export ze STAGu), uděláme obyčejný div
+                        innerHTML += `
+                            <div class="source-item" data-tooltip="${sourceName}">
+                                <i class="far fa-file-alt"></i> <span>Zdroj</span>
+                            </div>
+                        `;
+                    }
                 });
                 innerHTML += `</div>`;
             }

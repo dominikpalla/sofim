@@ -114,7 +114,12 @@ def get_response_from_llm(context_list, query):
     for idx, item in enumerate(context_list):
         source_info = item.get('source', 'Neznámý soubor')
         title_info = item.get('title', 'Bez názvu')
+        url_info = item.get('url', '')
+
         context_text += f"\n--- ZDROJ {idx + 1}: {title_info} (Soubor: {source_info}) ---\n"
+        if url_info:
+            context_text += f"Odkaz na zdroj: {url_info}\n"
+
         context_text += item['text'] + "\n"
 
     system_prompt = """
@@ -135,7 +140,8 @@ def get_response_from_llm(context_list, query):
 
     try:
         response = requests.post(LLM_API_URL, headers=headers, json=data)
-        if response.status_code == 200: return response.json()["choices"][0]["message"]["content"].strip()
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"].strip()
     except Exception:
         return f"Chyba API (Status {response.status_code}): {response.text}"
     return f"Chyba API (Status {response.status_code}): {response.text}"
@@ -162,10 +168,17 @@ def api_chat():
         response_text = get_response_from_llm(best_matches, user_query)
         seen = set()
         for match in best_matches:
-            src = match.get('title') or match.get('source', 'Zdroj')
-            if src not in seen:
-                response_sources.append(src)
-                seen.add(src)
+            # Vezmeme title, nebo source, a nově si držíme i URL
+            src_name = match.get('title') or match.get('source', 'Zdroj')
+            src_url = match.get('url', '')
+
+            # Abychom neopakovali stejný zdroj dvakrát pod stejným jménem
+            if src_name not in seen:
+                response_sources.append({
+                    "name": src_name,
+                    "url": src_url
+                })
+                seen.add(src_name)
     else:
         response_text = "Bohužel k tomuto dotazu nemám v databázi žádné informace."
 

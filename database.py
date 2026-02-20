@@ -130,13 +130,26 @@ def load_embeddings_from_db():
         conn.close()
         return []
 
-    cursor.execute("SELECT id, title, chunk, embedding, source_file FROM embeddings")
+    # Zkontrolujeme, zda jsi už ručně přidal sloupec source_url
+    cursor.execute("SHOW COLUMNS FROM embeddings LIKE 'source_url'")
+    has_source_url = cursor.fetchone() is not None
+
+    if has_source_url:
+        cursor.execute("SELECT id, title, chunk, embedding, source_file, source_url FROM embeddings")
+    else:
+        cursor.execute("SELECT id, title, chunk, embedding, source_file FROM embeddings")
+
     rows = cursor.fetchall()
     conn.close()
 
     embeddings = []
     for row in rows:
-        record_id, title, chunk, embedding_str, source_file = row
+        if has_source_url:
+            record_id, title, chunk, embedding_str, source_file, source_url = row
+        else:
+            record_id, title, chunk, embedding_str, source_file = row
+            source_url = ""
+
         try:
             embedding_array = np.array(json.loads(embedding_str))
         except (json.JSONDecodeError, TypeError):
@@ -147,7 +160,8 @@ def load_embeddings_from_db():
             "title": title,
             "text": chunk,
             "vector": embedding_array,
-            "source": source_file
+            "source": source_file,
+            "url": source_url
         })
 
     return embeddings
@@ -169,17 +183,20 @@ def prepare_next_table_for_update(mode="all"):
 
     if not live_exists or mode == "all":
         # Čistý stůl (Kompletní reload nebo úplně první spuštění databáze)
+        # Zde už rovnou počítáme s novým sloupcem source_url
         cursor.execute("""
             CREATE TABLE embeddings_next (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255),
                 chunk TEXT,
                 embedding JSON,
-                source_file VARCHAR(255)
+                source_file VARCHAR(255),
+                source_url VARCHAR(500)
             )
         """)
     else:
         # Částečný update: Vytvoříme stínovou tabulku jako přesnou kopii té stávající
+        # Pokud jsi přidal sloupec do 'embeddings', tak LIKE ho přenese i do 'embeddings_next'
         cursor.execute("CREATE TABLE embeddings_next LIKE embeddings")
         cursor.execute("INSERT INTO embeddings_next SELECT * FROM embeddings")
 
@@ -194,14 +211,14 @@ def prepare_next_table_for_update(mode="all"):
     conn.close()
 
 
-def insert_into_next_table(title, chunk, embedding, source_file):
+def insert_into_next_table(title, chunk, embedding, source_file, source_url=""):
     """Vkládá data do STÍNOVÉ tabulky."""
     conn = get_db_connection()
     cursor = conn.cursor()
     embedding_json = json.dumps(embedding.tolist())
     cursor.execute(
-        "INSERT INTO embeddings_next (title, chunk, embedding, source_file) VALUES (%s, %s, %s, %s)",
-        (title, chunk, embedding_json, source_file)
+        "INSERT INTO embeddings_next (title, chunk, embedding, source_file, source_url) VALUES (%s, %s, %s, %s, %s)",
+        (title, chunk, embedding_json, source_file, source_url)
     )
     conn.close()
 
