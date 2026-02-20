@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import io
 from pypdf import PdfReader
-import docx  # Ponecháváme, kdybychom v budoucnu chtěli importovat lokální DOCX
+import docx  # Ponecháváme pro případný budoucí lokální DOCX import
 
 from config import OPENAI_API_KEY, EMBEDDING_MODEL, OPENAI_EMBEDDING_URL
 from database import (
@@ -27,7 +27,6 @@ def get_urls_from_db():
     """Načte seznam URL k indexaci z databáze."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Ověříme, zda tabulka existuje (pro jistotu)
     try:
         cursor.execute("SELECT url FROM crawler_urls")
         urls = [row[0] for row in cursor.fetchall()]
@@ -40,7 +39,10 @@ def get_urls_from_db():
 
 
 def scrape_uhk_page(url):
-    """Stáhne stránku, vyčistí HTML a najde PDF odkazy."""
+    """
+    Stáhne stránku, najde PDF odkazy a pošle HTML do AI,
+    aby inteligentně extrahovala jen čistý text bez balastu.
+    """
     print(f"🕸️ Crawluji: {url}")
     try:
         headers = {"User-Agent": "SofimBot/1.0 (UHK Internal)"}
@@ -52,39 +54,62 @@ def scrape_uhk_page(url):
 
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        # 1. Hledání PDF odkazů PŘEDTÍM, než promažeme DOM
+        # 1. Extrakce PDF odkazů z celého DOMu
         pdf_urls = []
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href']
-            # UHK ukládá soubory často přes /file/ nebo končí .pdf
             if '/file/' in href or href.lower().endswith('.pdf'):
                 full_pdf_url = urljoin(url, href)
                 if full_pdf_url not in pdf_urls:
                     pdf_urls.append(full_pdf_url)
 
-        # 2. Agresivní čištění balastu
-        for element in soup(["header", "footer", "nav", "script", "style", "noscript", "iframe"]):
+        # 2. Příprava HTML pro LLM
+        # Odstraníme těžký technický balast, abychom zbytečně neplatili tokeny za Javascript a styly
+        for element in soup(["script", "style", "noscript", "svg", "video", "iframe"]):
             element.decompose()
 
-        # Zacílení na UHK specifické třídy
-        main_content = soup.find(class_="main__content") or soup.find("main") or soup.find("article")
-        target_soup = main_content if main_content else soup.body
+        # Vezmeme obsah těla stránky (nebo celé, pokud body chybí)
+        html_for_ai = str(soup.body) if soup.body else str(soup)
 
-        if not target_soup:
+        # 3. Necháme GPT vysekat čistý informační text
+        print("   🤖 Deleguji extrakci textu z HTML na umělou inteligenci...")
+        llm_headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+
+        prompt = f"""
+        Jsi expertní extraktor dat. Tvým úkolem je z následujícího zdrojového kódu webové stránky vytáhnout POUZE hlavní informační obsah.
+        Pravidla:
+        1. Ignoruj veškeré navigační prvky (hlavní menu), patičky, hlavičky univerzity, cookie lišty a podobný balast.
+        2. Ignoruj texty tlačítek nesouvisející s obsahem (např. "Sdílet na Facebooku", "Zpět na úvod", "Vyhledat").
+        3. Vrať absolutně čistý text, který nese informační hodnotu.
+        4. Neodpovídej žádnými úvodními frázemi (jako "Zde je text:"), prostě rovnou vypiš extrahovaný obsah.
+
+        Obsah webu:
+        {html_for_ai[:60000]}
+        """
+
+        data = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0  # Nulová teplota pro maximální věcnost a nulové halucinace
+        }
+
+        llm_response = requests.post("https://api.openai.com/v1/chat/completions", headers=llm_headers, json=data)
+
+        if llm_response.status_code == 200:
+            clean_text = llm_response.json()["choices"][0]["message"]["content"].strip()
+
+            # Pojistka: Pokud z toho AI nevyždímala skoro nic, asi to byla prázdná stránka
+            if len(clean_text) < 20:
+                print("   ⚠️ AI z této stránky nedostala žádný smysluplný text.")
+                return None, pdf_urls
+
+            return clean_text, pdf_urls
+        else:
+            print(f"   ⚠️ Chyba API při extrakci HTML: {llm_response.text}")
             return None, pdf_urls
 
-        # Odstranění dalšího balastu
-        for noise in target_soup.find_all(class_=["share-buttons", "sidebar", "breadcrumb", "cookies-bar"]):
-            noise.decompose()
-
-        # 3. Extrakce čistého textu
-        raw_text = target_soup.get_text(separator='\n', strip=True)
-        clean_text = "\n".join([line.strip() for line in raw_text.splitlines() if line.strip()])
-
-        return clean_text, pdf_urls
-
     except Exception as e:
-        print(f"⚠️ Chyba při stahování {url}: {e}")
+        print(f"⚠️ Chyba při stahování/zpracování {url}: {e}")
         return None, []
 
 
@@ -126,13 +151,9 @@ def read_csv_smart(fh):
     for encoding in encodings:
         fh.seek(0)
         try:
-            # Přečteme CSV
             df = pd.read_csv(fh, sep=None, engine='python', encoding=encoding, on_bad_lines='skip')
-
-            # Validace hlavičky podle klíčových slov
             keywords = ['zkratka', 'zkr_predm', 'nazev_cz', 'kredity', 'anotace_cz']
 
-            # Pokud hlavička nesedí, zkusíme ji najít níže
             col_str = str(list(df.columns)).lower()
             if not any(k in col_str for k in keywords):
                 fh.seek(0)
@@ -151,11 +172,9 @@ def read_csv_smart(fh):
                     df = pd.read_csv(fh, sep=None, engine='python', encoding=encoding, header=header_index,
                                      on_bad_lines='skip')
 
-            # Vyčištění
             df = df.dropna(how='all')
             df = df.fillna("")
             df.columns = [str(c).strip() for c in df.columns]
-
             return df
 
         except Exception:
@@ -163,48 +182,68 @@ def read_csv_smart(fh):
     return None
 
 
-# --- 3. Chunking funkce (Nezměněno) ---
+# --- 3. Chunking funkce ---
 
 def semantic_chunking(text, filename):
-    """Inteligentní řezání textu pomocí GPT-4o-mini."""
+    """
+    Inteligentní řezání textu pomocí GPT-4o-mini.
+    PLNÁ PODPORA FULLTEXTU - Dlouhé texty rozdělí na bloky a prožene AI v cyklu.
+    """
     if not text or len(text.strip()) < 10:
         return []
 
-    print(f"🧠 Sémantické řezání obsahu: {filename}...")
-
+    print(f"🧠 Sémantické řezání obsahu: {filename} ({len(text)} znaků)...")
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    shortened_text = text[:12000]  # Limit tokenů
 
-    prompt = f"""
-    Jsi expertní analytik. Rozděl text na logické celky (chunky).
-    Zdroj: {filename}
-    Pravidla:
-    1. Výstup MUSÍ být validní JSON.
-    2. Formát: {{"chunks": [ {{"title": "...", "content": "..."}} ]}}
-    Text k analýze:
-    {shortened_text}
-    """
+    # Rozsekáme celý dokument na bloky po cca 12000 znacích (aby nedošlo k limitu tokenů na jeden dotaz)
+    chunk_size = 12000
+    text_blocks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
-    data = {
-        "model": "gpt-4o-mini",  # Levný model na chunking
-        "messages": [{"role": "user", "content": prompt}],
-        "response_format": {"type": "json_object"}
-    }
+    all_extracted_chunks = []
 
-    try:
-        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data)
-        if response.status_code == 200:
-            result = response.json()
-            content = result["choices"][0]["message"]["content"]
-            json_content = json.loads(content)
+    for idx, block in enumerate(text_blocks):
+        if len(text_blocks) > 1:
+            print(f"   ⏳ Zpracovávám část {idx + 1}/{len(text_blocks)}...")
 
-            if "chunks" in json_content: return json_content["chunks"]
-            if "items" in json_content: return json_content["items"]
-    except Exception as e:
-        print(f"⚠️ Chyba AI chunkingu: {e}. Používám Fallback.")
+        prompt = f"""
+        Jsi expertní analytik. Rozděl text na logické celky (chunky).
+        Zdroj: {filename} (Část {idx + 1} z {len(text_blocks)})
+        Pravidla:
+        1. Výstup MUSÍ být validní JSON.
+        2. Formát: {{"chunks": [ {{"title": "...", "content": "..."}} ]}}
+        Text k analýze:
+        {block}
+        """
 
-    # Fallback: Vrátíme to jako jeden kus
-    return [{"title": f"Obsah z {filename}", "content": text}]
+        data = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.0
+        }
+
+        try:
+            response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data)
+            if response.status_code == 200:
+                result = response.json()
+                content = result["choices"][0]["message"]["content"]
+                json_content = json.loads(content)
+
+                if "chunks" in json_content:
+                    all_extracted_chunks.extend(json_content["chunks"])
+                elif "items" in json_content:
+                    all_extracted_chunks.extend(json_content["items"])
+            else:
+                print(f"   ⚠️ API Error u části {idx + 1}: {response.text}")
+        except Exception as e:
+            print(f"⚠️ Chyba AI chunkingu u části {idx + 1}: {e}.")
+
+    # Fallback, kdyby náhodou API totálně selhalo u všech částí
+    if not all_extracted_chunks:
+        print("   ⚠️ Sémantický chunking zcela selhal, používám hrubý fallback.")
+        return [{"title": f"Obsah z {filename}", "content": text[:10000]}]
+
+    return all_extracted_chunks
 
 
 def csv_row_chunking(df, filename):
@@ -215,11 +254,9 @@ def csv_row_chunking(df, filename):
     for index, row in df.iterrows():
         row_dict = row.to_dict()
 
-        # Identifikace
         nazev = row_dict.get('NAZEV_CZ', row_dict.get('NAZEV_AN', 'Neznámý předmět'))
         kod = row_dict.get('ZKR_PREDM', '')
 
-        # Hledání kódu jinde
         if not kod:
             for k, v in row_dict.items():
                 if 'zkr' in str(k).lower() and not kod: kod = str(v)
@@ -248,7 +285,7 @@ def csv_row_chunking(df, filename):
     return chunks
 
 
-# --- 4. Embedding (Nezměněno) ---
+# --- 4. Embedding ---
 
 def get_embedding(text):
     if not text or not text.strip():
@@ -275,12 +312,10 @@ def run_ingest(mode="all"):
     """
     print(f"🚀 Startuji indexaci na pozadí (Režim: {mode})...")
 
-    # Nastavíme status v DB na "běží" (zatím bez celkového počtu, ten se updatne hned jak ho zjistíme)
     if mode in ["all", "web"]: set_sync_status("WEB", "running")
     if mode in ["all", "csv"]: set_sync_status("CSV", "running")
 
     try:
-        # Připravíme stínovou tabulku (vyčistí vše / zkopíruje a připraví pro částečný update podle módu)
         prepare_next_table_for_update(mode)
         success_count = 0
 
@@ -289,7 +324,6 @@ def run_ingest(mode="all"):
             urls = get_urls_from_db()
             total_urls = len(urls)
 
-            # Nastavíme celkový počet URL do databáze pro progress bar
             set_sync_status("WEB", "running", total=total_urls)
 
             if urls:
@@ -327,7 +361,6 @@ def run_ingest(mode="all"):
                         log_sync_error("WEB", f"Chyba na {url}: {str(e)}")
                         print(f"   ❌ Chyba zpracování {url}: {e}")
 
-                    # 📢 Průběžný report postupu do databáze
                     update_sync_progress("WEB", idx)
             else:
                 print("⚠️ Žádná URL v databázi. Přidej je přes /admin.")
@@ -346,17 +379,14 @@ def run_ingest(mode="all"):
                         csv_chunks = csv_row_chunking(df, "Lokální Databáze Předmětů")
                         total_rows = len(csv_chunks)
 
-                        # Nastavíme celkový počet pro progress bar
                         set_sync_status("CSV", "running", total=total_rows)
 
                         for idx, chunk in enumerate(csv_chunks, 1):
                             emb = get_embedding(chunk["content"])
                             if emb is not None:
-                                # Klíčové: Udržíme identifikátor "STAG Export" pro parciální mazání
                                 insert_into_next_table(chunk["title"], chunk["content"], emb, "STAG Export")
                                 success_count += 1
 
-                            # 📢 Průběžný report postupu
                             update_sync_progress("CSV", idx)
 
                         print(f"✅ CSV zpracováno: {total_rows} předmětů.")
@@ -373,17 +403,14 @@ def run_ingest(mode="all"):
 
         # --- FINÁLE: PROHOZENÍ TABULEK ---
         print(f"🔄 Provádím atomické prohození tabulek (Zpracováno celkem {success_count} záznamů)...")
-        # Prohodíme tabulky i kdyby success_count byl 0 (např. při smazání url se musí live db aktualizovat)
         swap_tables_atomic()
 
-        # Nastavíme status na úspěch a získáme hezký timestamp aktuálního času
         if mode in ["all", "web"]: set_sync_status("WEB", "success")
         if mode in ["all", "csv"]: set_sync_status("CSV", "success")
         print("🎉 Indexace úspěšně dokončena. Data jsou LIVE.")
 
     except Exception as e:
         print(f"❌ Krizová chyba při indexaci: {e}")
-        # Při krizové chybě to zalogujeme a hodíme do stavu error/idle
         if mode in ["all", "web"]:
             log_sync_error("WEB", f"Kritická chyba: {str(e)}")
             set_sync_status("WEB", "error")
@@ -393,5 +420,4 @@ def run_ingest(mode="all"):
 
 
 if __name__ == "__main__":
-    # Pokud spustíš ingest.py ručně z konzole, spustí se kompletní indexace
     run_ingest("all")
