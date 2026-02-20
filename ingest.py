@@ -335,8 +335,14 @@ def run_ingest(mode="all"):
                         if web_text:
                             chunks = semantic_chunking(web_text, f"Web: {url}")
                             for chunk in chunks:
-                                title = chunk.get("title", "Webová stránka")
-                                content = chunk.get("content", "")
+                                title = chunk.get("title", "Webová stránka").strip()
+                                content = chunk.get("content", "").strip()
+
+                                # POJISTKA PROTI PRÁZDNÝM CHUNKŮM
+                                if not content:
+                                    print(f"   ⚠️ Přeskakuji prázdný chunk: {title}")
+                                    continue
+
                                 emb = get_embedding(f"URL: {url}\n{content}")
                                 if emb is not None:
                                     insert_into_next_table(title, content, emb, url)
@@ -350,8 +356,14 @@ def run_ingest(mode="all"):
                                 if pdf_text:
                                     chunks = semantic_chunking(pdf_text, f"PDF: {pdf_url.split('/')[-1]}")
                                     for chunk in chunks:
-                                        title = chunk.get("title", "PDF Dokument")
-                                        content = chunk.get("content", "")
+                                        title = chunk.get("title", "PDF Dokument").strip()
+                                        content = chunk.get("content", "").strip()
+
+                                        # POJISTKA PROTI PRÁZDNÝM CHUNKŮM V PDF
+                                        if not content:
+                                            print(f"   ⚠️ Přeskakuji prázdný chunk v PDF: {title}")
+                                            continue
+
                                         emb = get_embedding(f"Zdroj PDF: {pdf_url}\n{content}")
                                         if emb is not None:
                                             insert_into_next_table(title, content, emb, pdf_url)
