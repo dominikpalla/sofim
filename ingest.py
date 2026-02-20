@@ -40,12 +40,13 @@ def get_urls_from_db():
 
 def scrape_uhk_page(url):
     """
-    Stáhne stránku, najde PDF odkazy a pošle HTML do AI,
+    Stáhne stránku, najde PDF odkazy a pošle HTML do AI, 
     aby inteligentně extrahovala jen čistý text bez balastu.
     """
     print(f"🕸️ Crawluji: {url}")
     try:
         headers = {"User-Agent": "SofimBot/1.0 (UHK Internal)"}
+        # Tady stahujeme web, timeout 10s je ok
         response = requests.get(url, headers=headers, timeout=10)
 
         if response.status_code != 200:
@@ -64,11 +65,9 @@ def scrape_uhk_page(url):
                     pdf_urls.append(full_pdf_url)
 
         # 2. Příprava HTML pro LLM
-        # Odstraníme těžký technický balast, abychom zbytečně neplatili tokeny za Javascript a styly
         for element in soup(["script", "style", "noscript", "svg", "video", "iframe"]):
             element.decompose()
 
-        # Vezmeme obsah těla stránky (nebo celé, pokud body chybí)
         html_for_ai = str(soup.body) if soup.body else str(soup)
 
         # 3. Necháme GPT vysekat čistý informační text
@@ -90,27 +89,30 @@ def scrape_uhk_page(url):
         data = {
             "model": "gpt-4o-mini",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0  # Nulová teplota pro maximální věcnost a nulové halucinace
+            "temperature": 0.0
         }
 
-        llm_response = requests.post("https://api.openai.com/v1/chat/completions", headers=llm_headers, json=data)
+        # PŘIDÁN TIMEOUT 60s
+        llm_response = requests.post("https://api.openai.com/v1/chat/completions", headers=llm_headers, json=data,
+                                     timeout=180)
 
         if llm_response.status_code == 200:
             clean_text = llm_response.json()["choices"][0]["message"]["content"].strip()
 
-            # Pojistka: Pokud z toho AI nevyždímala skoro nic, asi to byla prázdná stránka
             if len(clean_text) < 20:
                 print("   ⚠️ AI z této stránky nedostala žádný smysluplný text.")
                 return None, pdf_urls
 
             return clean_text, pdf_urls
         else:
-            print(f"   ⚠️ Chyba API při extrakci HTML: {llm_response.text}")
-            return None, pdf_urls
+            # POKUD API VRÁTÍ CHYBU, TVRDĚ TO ZASTAVÍME A POŠLEME DO ADMIN PANELU
+            raise Exception(f"Chyba OpenAI při extrakci HTML (HTTP {llm_response.status_code}): {llm_response.text}")
 
+    except requests.exceptions.Timeout:
+        raise Exception(f"Timeout: OpenAI API neodpovědělo při extrakci HTML pro {url} včas.")
     except Exception as e:
-        print(f"⚠️ Chyba při stahování/zpracování {url}: {e}")
-        return None, []
+        # Propagujeme chybu výš, aby se ukázala v UI
+        raise Exception(f"Chyba zpracování {url}: {str(e)}")
 
 
 def process_pdf_from_url(pdf_url):
@@ -129,17 +131,15 @@ def process_pdf_from_url(pdf_url):
                 if extracted:
                     text += extracted + "\n"
 
-            # Validace, zda to není jen sken (obrázek)
             if len(text.strip()) < 10:
                 print(f"   ⚠️ PDF {pdf_url} je pravděpodobně sken bez textové vrstvy.")
                 return None
 
             return text
         else:
-            print(f"   ❌ Nelze stáhnout PDF (Status {response.status_code})")
+            raise Exception(f"Nelze stáhnout PDF (HTTP {response.status_code})")
     except Exception as e:
-        print(f"   ❌ Chyba čtení PDF {pdf_url}: {e}")
-    return None
+        raise Exception(f"Chyba čtení PDF {pdf_url}: {str(e)}")
 
 
 # --- 2. Pomocné funkce pro CSV (Hybridní model) ---
@@ -195,7 +195,6 @@ def semantic_chunking(text, filename):
     print(f"🧠 Sémantické řezání obsahu: {filename} ({len(text)} znaků)...")
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
 
-    # Rozsekáme celý dokument na bloky po cca 12000 znacích (aby nedošlo k limitu tokenů na jeden dotaz)
     chunk_size = 12000
     text_blocks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
@@ -223,7 +222,10 @@ def semantic_chunking(text, filename):
         }
 
         try:
-            response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data)
+            # PŘIDÁN TIMEOUT 60s
+            response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data,
+                                     timeout=180)
+
             if response.status_code == 200:
                 result = response.json()
                 content = result["choices"][0]["message"]["content"]
@@ -234,14 +236,18 @@ def semantic_chunking(text, filename):
                 elif "items" in json_content:
                     all_extracted_chunks.extend(json_content["items"])
             else:
-                print(f"   ⚠️ API Error u části {idx + 1}: {response.text}")
-        except Exception as e:
-            print(f"⚠️ Chyba AI chunkingu u části {idx + 1}: {e}.")
+                # TVRDÁ CHYBA API
+                raise Exception(f"Chyba OpenAI při chunkingu (HTTP {response.status_code}): {response.text}")
 
-    # Fallback, kdyby náhodou API totálně selhalo u všech částí
+        except requests.exceptions.Timeout:
+            raise Exception(f"Timeout: OpenAI neodpovědělo při chunkingu dokumentu {filename} včas.")
+        except Exception as e:
+            # Propagace výš
+            raise Exception(f"Chyba AI chunkingu u části {idx + 1}: {str(e)}")
+
     if not all_extracted_chunks:
-        print("   ⚠️ Sémantický chunking zcela selhal, používám hrubý fallback.")
-        return [{"title": f"Obsah z {filename}", "content": text[:10000]}]
+        print("   ⚠️ Sémantický chunking selhal nebo nevrátil nic.")
+        return []
 
     return all_extracted_chunks
 
@@ -295,12 +301,16 @@ def get_embedding(text):
     data = {"input": text, "model": EMBEDDING_MODEL}
 
     try:
-        response = requests.post(OPENAI_EMBEDDING_URL, headers=headers, json=data)
+        # PŘIDÁN TIMEOUT 30s
+        response = requests.post(OPENAI_EMBEDDING_URL, headers=headers, json=data, timeout=30)
         if response.status_code == 200:
             return np.array(response.json()["data"][0]["embedding"])
-    except Exception:
-        pass
-    return None
+        else:
+            raise Exception(f"Chyba OpenAI Embeddings (HTTP {response.status_code}): {response.text}")
+    except requests.exceptions.Timeout:
+        raise Exception("Timeout: OpenAI Embedding API neodpovědělo včas.")
+    except Exception as e:
+        raise Exception(f"Chyba při tvorbě embeddingu: {str(e)}")
 
 
 # --- 5. HLAVNÍ LOGIKA INDEXACE ---
@@ -338,9 +348,7 @@ def run_ingest(mode="all"):
                                 title = chunk.get("title", "Webová stránka").strip()
                                 content = chunk.get("content", "").strip()
 
-                                # POJISTKA PROTI PRÁZDNÝM CHUNKŮM
                                 if not content:
-                                    print(f"   ⚠️ Přeskakuji prázdný chunk: {title}")
                                     continue
 
                                 emb = get_embedding(f"URL: {url}\n{content}")
@@ -359,9 +367,7 @@ def run_ingest(mode="all"):
                                         title = chunk.get("title", "PDF Dokument").strip()
                                         content = chunk.get("content", "").strip()
 
-                                        # POJISTKA PROTI PRÁZDNÝM CHUNKŮM V PDF
                                         if not content:
-                                            print(f"   ⚠️ Přeskakuji prázdný chunk v PDF: {title}")
                                             continue
 
                                         emb = get_embedding(f"Zdroj PDF: {pdf_url}\n{content}")
@@ -370,6 +376,7 @@ def run_ingest(mode="all"):
                                             success_count += 1
 
                     except Exception as e:
+                        # CHYBA SE CHYTÍ ZDE A POŠLE ROVNOU DO UI
                         log_sync_error("WEB", f"Chyba na {url}: {str(e)}")
                         print(f"   ❌ Chyba zpracování {url}: {e}")
 
@@ -394,10 +401,13 @@ def run_ingest(mode="all"):
                         set_sync_status("CSV", "running", total=total_rows)
 
                         for idx, chunk in enumerate(csv_chunks, 1):
-                            emb = get_embedding(chunk["content"])
-                            if emb is not None:
-                                insert_into_next_table(chunk["title"], chunk["content"], emb, "STAG Export")
-                                success_count += 1
+                            try:
+                                emb = get_embedding(chunk["content"])
+                                if emb is not None:
+                                    insert_into_next_table(chunk["title"], chunk["content"], emb, "STAG Export")
+                                    success_count += 1
+                            except Exception as e:
+                                log_sync_error("CSV", f"Chyba na řádku {idx}: {str(e)}")
 
                             update_sync_progress("CSV", idx)
 
