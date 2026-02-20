@@ -14,11 +14,116 @@ def get_db_connection():
     )
 
 
-# --- STANDARDNÍ ČTENÍ (PRO CHATBOTA) ---
-# Chatbot vždy čte z tabulky 'embeddings' (bez ohledu na to, co se děje na pozadí)
-def load_embeddings_from_db():
+# --- INICIALIZACE STRUKTURY DATABÁZE (PRO ADMIN PANEL) ---
+
+def init_db_schema():
+    """Vytvoří nezbytné tabulky pro chod admin panelu a sledování indexace, pokud neexistují."""
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # 1. Tabulka pro URL adresy z crawleru
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS crawler_urls (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            url VARCHAR(500) NOT NULL UNIQUE,
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # 2. Tabulka pro sledování času a průběhu aktualizací
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sync_status (
+            sync_type VARCHAR(10) PRIMARY KEY,
+            last_updated DATETIME,
+            status VARCHAR(50),
+            total_items INT DEFAULT 0,
+            processed_items INT DEFAULT 0,
+            last_error TEXT
+        )
+    """)
+
+    # Založíme výchozí stavy, ignoruje se, pokud už záznamy existují
+    cursor.execute("INSERT IGNORE INTO sync_status (sync_type, status) VALUES ('WEB', 'idle'), ('CSV', 'idle')")
+    conn.commit()
+    conn.close()
+
+
+# --- FUNKCE PRO SLEDOVÁNÍ PRŮBĚHU INDEXACE ---
+
+def get_sync_status():
+    """Vrátí aktuální stavy aktualizací pro admin panel."""
+    init_db_schema()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT sync_type, last_updated, status, total_items, processed_items, last_error FROM sync_status")
+    rows = cursor.fetchall()
+    conn.close()
+
+    return {
+        row[0]: {
+            "last_updated": row[1],
+            "status": row[2],
+            "total_items": row[3],
+            "processed_items": row[4],
+            "last_error": row[5]
+        } for row in rows
+    }
+
+
+def set_sync_status(sync_type, status, total=0):
+    """Při startu nastaví status, vynuluje progress a chyby. Při úspěchu uloží čas."""
+    init_db_schema()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if status == 'running':
+        cursor.execute(
+            "UPDATE sync_status SET status = 'running', total_items = %s, processed_items = 0, last_error = NULL WHERE sync_type = %s",
+            (total, sync_type)
+        )
+    elif status == 'success':
+        cursor.execute(
+            "UPDATE sync_status SET status = 'idle', last_updated = NOW() WHERE sync_type = %s",
+            (sync_type,)
+        )
+    else:
+        cursor.execute(
+            "UPDATE sync_status SET status = %s WHERE sync_type = %s",
+            (status, sync_type)
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def update_sync_progress(sync_type, processed_count):
+    """Aktualizuje počet zpracovaných položek pro progress bar."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE sync_status SET processed_items = %s WHERE sync_type = %s", (processed_count, sync_type))
+    conn.commit()
+    conn.close()
+
+
+def log_sync_error(sync_type, error_msg):
+    """Zapíše chybovou hlášku do databáze (zřetězí k existujícím)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE sync_status SET last_error = CONCAT(IFNULL(last_error, ''), %s, '\n') WHERE sync_type = %s",
+        (error_msg, sync_type)
+    )
+    conn.commit()
+    conn.close()
+
+
+# --- STANDARDNÍ ČTENÍ (PRO CHATBOTA) ---
+
+def load_embeddings_from_db():
+    """Chatbot vždy čte z tabulky 'embeddings' bez ohledu na to, co se děje na pozadí."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
     # Zkontrolujeme, jestli tabulka existuje (pro první spuštění)
     cursor.execute("SHOW TABLES LIKE 'embeddings'")
     if not cursor.fetchone():
@@ -48,26 +153,44 @@ def load_embeddings_from_db():
     return embeddings
 
 
-# --- LOGIKA PRO ZERO-DOWNTIME INGEST ---
+# --- LOGIKA PRO ZERO-DOWNTIME INGEST (VČETNĚ ČÁSTEČNÉHO UPDATE) ---
 
-def init_next_table():
-    """Vytvoří prázdnou stínovou tabulku 'embeddings_next'."""
+def prepare_next_table_for_update(mode="all"):
+    """Vytvoří stínovou tabulku - buď prázdnou, nebo jako kopii živé pro částečný update."""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1. Smažeme případné pozůstatky z minulého nepovedeného běhu
+    # Zkontrolujeme, jestli už existuje hlavní "ostrá" tabulka
+    cursor.execute("SHOW TABLES LIKE 'embeddings'")
+    live_exists = cursor.fetchone()
+
+    # Smažeme případné pozůstatky z minulého nepovedeného běhu
     cursor.execute("DROP TABLE IF EXISTS embeddings_next")
 
-    # 2. Vytvoříme novou tabulku se stejnou strukturou
-    cursor.execute("""
-        CREATE TABLE embeddings_next (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            title VARCHAR(255),
-            chunk TEXT,
-            embedding JSON,
-            source_file VARCHAR(255)
-        )
-    """)
+    if not live_exists or mode == "all":
+        # Čistý stůl (Kompletní reload nebo úplně první spuštění databáze)
+        cursor.execute("""
+            CREATE TABLE embeddings_next (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                title VARCHAR(255),
+                chunk TEXT,
+                embedding JSON,
+                source_file VARCHAR(255)
+            )
+        """)
+    else:
+        # Částečný update: Vytvoříme stínovou tabulku jako přesnou kopii té stávající
+        cursor.execute("CREATE TABLE embeddings_next LIKE embeddings")
+        cursor.execute("INSERT INTO embeddings_next SELECT * FROM embeddings")
+
+        # Nyní vymažeme z kopie ta data, která se chystáme nahradit čerstvými
+        if mode == "web":
+            # Aktualizujeme jen weby, takže smažeme vše, co NENÍ STAG Export
+            cursor.execute("DELETE FROM embeddings_next WHERE source_file != 'STAG Export'")
+        elif mode == "csv":
+            # Aktualizujeme jen STAG CSV, takže smažeme záznamy ze STAGu (ponecháme weby)
+            cursor.execute("DELETE FROM embeddings_next WHERE source_file = 'STAG Export'")
+
     conn.close()
 
 

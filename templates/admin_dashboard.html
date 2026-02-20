@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOFIM - Admin Dashboard</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; margin: 0; color: #333; }
+        .header { background-color: #1a73e8; color: white; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; }
+        .header a { color: white; text-decoration: none; font-weight: bold; background: rgba(255,255,255,0.2); padding: 8px 15px; border-radius: 5px; }
+        .container { max-width: 1200px; margin: 30px auto; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
+        .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        .card h2 { margin-top: 0; color: #1a73e8; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; }
+
+        /* Tabulka URL */
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #eee; }
+        th { background-color: #f8f9fa; }
+        .btn-delete { color: #d93025; text-decoration: none; }
+
+        /* Formuláře a tlačítka */
+        .input-group { display: flex; gap: 10px; margin-top: 15px; }
+        input[type="url"] { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        .btn { padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; color: white; }
+        .btn-primary { background-color: #1a73e8; }
+        .btn-success { background-color: #1e8e3e; }
+        .btn-warning { background-color: #f9ab00; color: #000; }
+        .btn:disabled { background-color: #ccc; cursor: not-allowed; color: #666; }
+
+        /* Sync sekce */
+        .sync-block { margin-bottom: 25px; padding: 15px; border: 1px solid #e0e0e0; border-radius: 8px; background: #fafafa; }
+        .sync-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .sync-info { font-size: 0.9em; color: #5f6368; }
+
+        /* Progress Bar */
+        .progress-container { width: 100%; background-color: #e0e0e0; border-radius: 5px; margin-top: 10px; display: none; overflow: hidden;}
+        .progress-bar { width: 0%; height: 20px; background-color: #1e8e3e; text-align: center; line-height: 20px; color: white; font-size: 12px; transition: width 0.4s ease; }
+
+        /* Chyby */
+        .error-log { margin-top: 10px; font-size: 12px; color: #d93025; background: #fce8e6; padding: 10px; border-radius: 5px; display: none; max-height: 100px; overflow-y: auto;}
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h2><i class="fas fa-cogs"></i> SOFIM Admin Dashboard</h2>
+    <a href="/admin/logout"><i class="fas fa-sign-out-alt"></i> Odhlásit se</a>
+</div>
+
+<div class="container">
+
+    <div class="card">
+        <h2><i class="fas fa-globe"></i> Zdroje webových dat</h2>
+        <p>Zadejte URL adresy UHK stránek, které má Sofim znát.</p>
+
+        <form method="POST" class="input-group">
+            <input type="url" name="new_url" placeholder="https://www.uhk.cz/..." required>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Přidat</button>
+        </form>
+
+        <div style="max-height: 500px; overflow-y: auto; margin-top: 20px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>URL adresa</th>
+                        <th style="width: 50px;">Akce</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for url in urls %}
+                    <tr>
+                        <td style="word-break: break-all;"><a href="{{ url[1] }}" target="_blank">{{ url[1] }}</a></td>
+                        <td><a href="/admin/delete/{{ url[0] }}" class="btn-delete" title="Smazat"><i class="fas fa-trash"></i></a></td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="2" style="text-align: center; color: #777;">Zatím nebyly přidány žádné URL adresy.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2><i class="fas fa-sync-alt"></i> Aktualizace Znalostí (Zero-Downtime)</h2>
+        <p>Chatbot zůstává plně funkční i během aktualizace dat.</p>
+
+        <div class="sync-block" id="block-WEB">
+            <div class="sync-header">
+                <div>
+                    <strong><i class="fas fa-spider"></i> Webové stránky a PDF</strong>
+                    <div class="sync-info">Poslední úspěšná aktualizace: <span id="time-WEB">Načítám...</span></div>
+                </div>
+                <a href="/admin/trigger_sync/web" class="btn btn-primary sync-btn"><i class="fas fa-play"></i> Spustit weby</a>
+            </div>
+            <div class="progress-container" id="progress-container-WEB">
+                <div class="progress-bar" id="progress-bar-WEB">0%</div>
+            </div>
+            <div class="sync-info" id="detail-WEB" style="margin-top: 5px;"></div>
+            <div class="error-log" id="error-WEB"></div>
+        </div>
+
+        <div class="sync-block" id="block-CSV">
+            <div class="sync-header">
+                <div>
+                    <strong><i class="fas fa-table"></i> Předměty ze STAGu (CSV)</strong>
+                    <div class="sync-info">Poslední úspěšná aktualizace: <span id="time-CSV">Načítám...</span></div>
+                </div>
+                <a href="/admin/trigger_sync/csv" class="btn btn-success sync-btn"><i class="fas fa-play"></i> Spustit tabulku</a>
+            </div>
+            <div class="progress-container" id="progress-container-CSV">
+                <div class="progress-bar" id="progress-bar-CSV">0%</div>
+            </div>
+            <div class="sync-info" id="detail-CSV" style="margin-top: 5px;"></div>
+            <div class="error-log" id="error-CSV"></div>
+        </div>
+
+        <div style="text-align: center; margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
+            <a href="/admin/trigger_sync/all" class="btn btn-warning sync-btn" style="width: 100%; font-size: 16px;">
+                <i class="fas fa-bolt"></i> Kompletní obnova všeho (Weby + STAG)
+            </a>
+            <p style="font-size: 12px; color: #666; margin-top: 10px;">Toto smaže aktuální data a stáhne je všechna úplně znovu.</p>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    // Magie na pozadí: Pravidelná kontrola stavu indexace
+    function checkStatus() {
+        fetch('/admin/api/status')
+            .then(response => response.json())
+            .then(data => {
+                let isAnyRunning = false;
+
+                ['WEB', 'CSV'].forEach(type => {
+                    const info = data[type];
+                    if (!info) return;
+
+                    // Formátování data
+                    const timeEl = document.getElementById(`time-${type}`);
+                    if (info.last_updated) {
+                        const dateObj = new Date(info.last_updated);
+                        timeEl.innerText = dateObj.toLocaleString('cs-CZ');
+                    } else {
+                        timeEl.innerText = "Nikdy";
+                    }
+
+                    const progressContainer = document.getElementById(`progress-container-${type}`);
+                    const progressBar = document.getElementById(`progress-bar-${type}`);
+                    const detail = document.getElementById(`detail-${type}`);
+                    const errorBox = document.getElementById(`error-${type}`);
+
+                    if (info.status === 'running') {
+                        isAnyRunning = true;
+                        progressContainer.style.display = 'block';
+
+                        // Výpočet procent
+                        let percent = 0;
+                        if (info.total_items > 0) {
+                            percent = Math.round((info.processed_items / info.total_items) * 100);
+                        }
+                        progressBar.style.width = percent + '%';
+                        progressBar.innerText = percent + '%';
+                        detail.innerText = `Zpracováno ${info.processed_items} z ${info.total_items}`;
+
+                    } else {
+                        progressContainer.style.display = 'none';
+                        detail.innerText = info.status === 'idle' ? 'Připraveno' : 'Chyba';
+                    }
+
+                    // Výpis chyb
+                    if (info.last_error) {
+                        errorBox.style.display = 'block';
+                        errorBox.innerText = info.last_error;
+                    } else {
+                        errorBox.style.display = 'none';
+                    }
+                });
+
+                // Zamknutí nebo odemknutí všech tlačítek
+                const buttons = document.querySelectorAll('.sync-btn');
+                buttons.forEach(btn => {
+                    if (isAnyRunning) {
+                        btn.style.pointerEvents = 'none';
+                        btn.style.opacity = '0.5';
+                        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Zpracovávám...';
+                    } else {
+                        btn.style.pointerEvents = 'auto';
+                        btn.style.opacity = '1';
+
+                        // Obnova původního textu podle toho, o jaké tlačítko jde
+                        if (btn.classList.contains('btn-primary')) btn.innerHTML = '<i class="fas fa-play"></i> Spustit weby';
+                        if (btn.classList.contains('btn-success')) btn.innerHTML = '<i class="fas fa-play"></i> Spustit tabulku';
+                        if (btn.classList.contains('btn-warning')) btn.innerHTML = '<i class="fas fa-bolt"></i> Kompletní obnova všeho (Weby + STAG)';
+                    }
+                });
+            })
+            .catch(err => console.error("Nelze načíst stav:", err));
+    }
+
+    // Spustíme dotazování každou vteřinu
+    setInterval(checkStatus, 1000);
+    checkStatus(); // A zavoláme hned při načtení
+</script>
+
+</body>
+</html>

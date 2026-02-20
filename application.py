@@ -1,12 +1,16 @@
 import numpy as np
-import json
-from flask import Flask, request, render_template, jsonify
+from flask import Flask, request, render_template, jsonify, session, redirect, url_for
 import requests
-from database import load_embeddings_from_db
+import threading
+from database import load_embeddings_from_db, get_db_connection, get_sync_status
+from ingest import run_ingest
 from config import OPENAI_API_KEY, EMBEDDING_MODEL, OPENAI_EMBEDDING_URL, LLM_API_URL
 import re
 
 app = Flask(__name__)
+
+app.secret_key = "super_tajny_klic_pro_session"  # Tajný klíč pro session (v produkci dej do .env)
+ADMIN_PASSWORD = "studijkojede"
 
 
 # --- Pomocné funkce ---
@@ -33,14 +37,9 @@ def is_subject_code(word):
     Rozpozná, zda slovo vypadá jako kód předmětu (např. ALG1, OA1, KP/ALG).
     Vyloučí běžná slova jako 'kontakt', 'katedra', 'na'.
     """
-    # Musí mít 2-8 znaků
     if not (2 <= len(word) <= 8):
         return False
 
-    # Musí obsahovat alespoň jedno velké písmeno nebo číslo (pokud je zadáno velkými)
-    # Ale my dostaneme 'word' už z tokenizace, takže musíme být opatrní.
-
-    # Seznam zakázaných slov (běžná slova, která by se mohla splést s kódy)
     stopwords = {'pro', 'kde', 'kdy', 'jak', 'co', 'na', 'do', 'se', 'ze', 'ke', 've',
                  'test', 'info', 'data', 'stag', 'fim', 'uhk', 'pan', 'pani',
                  'doc', 'prof', 'ing', 'mgr', 'bc', 'phd', 'kontakt', 'vedouci'}
@@ -48,17 +47,9 @@ def is_subject_code(word):
     if word.lower() in stopwords:
         return False
 
-    # Musí obsahovat alespoň jedno písmeno (ne jen čísla, i když na FIMu jsou i kódy s čísly)
-    # Ale hlavně: Kódy bývají 'OA1', 'ALG', '4IT101'.
-    # Pokud je to jen "Dominik", tak to projde jako validní slovo, ale my chceme jen KÓDY.
-
-    # Zkusíme přísnější pravidlo:
-    # 1. Obsahuje číslo? (OA1, 4IT) -> JASNÝ KÓD
     if any(char.isdigit() for char in word):
         return True
 
-    # 2. Je to celé velkými písmeny a má to 2-5 znaků? (ALG, ZPRO) -> ASI KÓD
-    # (Tady spoléháme na to, že uživatel napíše ALG, ne alg. Pokud napíše alg, boostneme to taky, nevadí).
     if word.isalpha() and len(word) <= 5:
         return True
 
@@ -70,25 +61,17 @@ def find_top_k_matches(query_embedding, embeddings, query_text, k=3):
     if not embeddings:
         return []
 
-    # Rozbijeme dotaz na slova. Zachováme původní velikost písmen pro detekci kódů!
     raw_tokens = re.findall(r'\b\w+\b', query_text)
 
     scored_embeddings = []
     for item in embeddings:
-        # 1. Základní skóre (Sémantika)
         score = cosine_similarity(query_embedding, item["vector"])
-
-        # 2. Smart Keyword Boost
-        item_title = item["title"]  # Původní title s velkými písmeny
+        item_title = item["title"]
 
         boost = 0.0
         for token in raw_tokens:
-            # Aplikujeme boost JENOM pokud to vypadá jako kód předmětu
             if is_subject_code(token):
-                # Hledáme přesnou shodu kódu v titulku (case-insensitive, ale boundary-sensitive)
-                # \bTOKEN\b zajistí, že ALG nenajde v "Algebra", ale najde v "(ALG)"
                 if re.search(r'\b' + re.escape(token) + r'\b', item_title, re.IGNORECASE):
-                    # Je to kód a je v nadpisu! Boost!
                     print(f"🚀 Boostuji: {item['title']} kvůli kódu '{token}'")
                     boost += 0.5  # Masivní boost
 
@@ -158,7 +141,7 @@ def get_response_from_llm(context_list, query):
     return f"Chyba API (Status {response.status_code}): {response.text}"
 
 
-# --- Routes ---
+# --- Routes pro Chatbota ---
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -170,7 +153,6 @@ def api_chat():
     query_embedding = get_query_embedding(search_query)
     embeddings = load_embeddings_from_db()
 
-    # Hledání s chytrým boostem (předáváme původní dotaz pro detekci kódů)
     best_matches = find_top_k_matches(query_embedding, embeddings, user_query, k=3)
 
     response_sources = []
@@ -193,6 +175,101 @@ def api_chat():
 @app.route("/", methods=["GET", "POST"])
 def home():
     return render_template("index.html")
+
+
+# --- Routes pro Admin Panel ---
+
+@app.route("/admin", methods=["GET", "POST"])
+def admin_login():
+    if session.get("logged_in"):
+        return redirect(url_for("admin_dashboard"))
+
+    if request.method == "POST":
+        password = request.form.get("password")
+        if password == ADMIN_PASSWORD:
+            session["logged_in"] = True
+            return redirect(url_for("admin_dashboard"))
+        else:
+            return render_template("admin_login.html", error="Špatné heslo!")
+
+    return render_template("admin_login.html")
+
+
+@app.route("/admin/dashboard", methods=["GET", "POST"])
+def admin_dashboard():
+    if not session.get("logged_in"):
+        return redirect(url_for("admin_login"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if request.method == "POST":
+        new_url = request.form.get("new_url")
+        if new_url:
+            try:
+                cursor.execute("INSERT INTO crawler_urls (url) VALUES (%s)", (new_url,))
+                conn.commit()
+            except:
+                pass  # Ignorujeme duplikáty
+
+    cursor.execute("SELECT id, url FROM crawler_urls")
+    urls = cursor.fetchall()
+    conn.close()
+
+    # Získáme aktuální stav aktualizací pro zobrazení na dashboardu
+    status_data = get_sync_status()
+
+    return render_template("admin_dashboard.html", urls=urls, status_data=status_data)
+
+
+@app.route("/admin/delete/<int:url_id>")
+def admin_delete_url(url_id):
+    if not session.get("logged_in"):
+        return redirect(url_for("admin_login"))
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM crawler_urls WHERE id = %s", (url_id,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/api/status")
+def admin_api_status():
+    """Vrací aktuální stav indexace jako JSON pro AJAX polling ve frontendu."""
+    if not session.get("logged_in"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    return jsonify(get_sync_status())
+
+
+@app.route("/admin/trigger_sync/<mode>")
+def admin_trigger_sync(mode):
+    """Spustí ingest na pozadí jako asynchronní vlákno."""
+    if not session.get("logged_in"):
+        return redirect(url_for("admin_login"))
+
+    status_data = get_sync_status()
+
+    # Zkontrolujeme, jestli už indexace zrovna neběží
+    is_running = any(data['status'] == 'running' for data in status_data.values())
+
+    if mode in ["all", "web", "csv"] and not is_running:
+        # Pustíme to na pozadí, ať tě to nezdržuje
+        thread = threading.Thread(target=run_ingest, args=(mode,))
+        thread.daemon = True
+        thread.start()
+
+    # Hned se vrátíme na dashboard, kde se chytí AJAX a ukáže ti hezký progress
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/logout")
+def admin_logout():
+    session.pop("logged_in", None)
+    return redirect(url_for("home"))
 
 
 if __name__ == "__main__":
