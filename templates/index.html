@@ -70,6 +70,8 @@
             return formatted;
         }
 
+        let chatHistory = [];
+
         // --- Hlavní odesílací smyčka ---
         form.addEventListener('submit', async function(e) {
             e.preventDefault(); // Zabráníme refreshnutí stránky
@@ -93,7 +95,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ query: message })
+                    body: JSON.stringify({ query: message, history: chatHistory })
                 });
 
                 const data = await response.json();
@@ -102,6 +104,10 @@
                 loadingIndicator.style.display = 'none';
 
                 if (data.response) {
+
+                    chatHistory.push({ role: 'user', content: message });
+                    chatHistory.push({ role: 'assistant', content: data.response });
+
                     // Formátování odpovědi (Markdown -> HTML)
                     const formattedResponse = parseMarkdown(data.response);
 

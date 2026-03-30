@@ -90,21 +90,36 @@ def find_top_k_matches(query_embedding, embeddings, query_text, k=8):
     return [item for score, item in scored_embeddings[:k] if score > 0.15]
 
 
-def rewrite_query_for_search(user_query):
-    """LLM přepis dotazu."""
+def rewrite_query_for_search(user_query, history):
+    """LLM přepis dotazu s využitím historie chatu."""
+    # Vytáhneme max 3 poslední konverzace, ať to nežere moc tokenů
+    history_text = ""
+    for msg in history[-6:]:
+        role = "Student" if msg["role"] == "user" else "Sofim"
+        history_text += f"{role}: {msg['content']}\n"
+
     system_prompt = """
     Jsi expertní AI pro optimalizaci vyhledávacích dotazů v univerzitní databázi (RAG).
+    Máš k dispozici nedávnou historii konverzace. Tvým úkolem je přepsat poslední dotaz studenta tak, aby fungoval jako samostatný vyhledávací dotaz bez kontextu.
+
+    Příklad:
+    Historie: 
+    Student: Kdo je proděkan pro studium?
+    Sofim: Je to doc. Ing. Petra Poulová, Ph.D.
+    Dotaz k přepsání: Kde ji najdu?
+    TVŮJ VÝSTUP: Kde najdu doc. Ing. Petru Poulovou, Ph.D. kancelář kontakt?
 
     Pravidla:
-    - Pokud dotaz obsahuje zkratku (např. OA1, ZPRO), ZACHOVEJ JI v přesném znění!
-    - Pokud je dotaz obecný ("kdy je zápis"), rozšiř ho o klíčová slova ("harmonogram", "termín").
-    - Odstraň balast.
+    - Vrať POUZE optimalizovaný vyhledávací text, nic jiného.
+    - ZACHOVEJ ZKRATKY (např. OA1, ZPRO)!
     """
 
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    prompt = f"Historie:\n{history_text}\n\nDotaz k přepsání: {user_query}" if history else f"Dotaz k přepsání: {user_query}"
+
     data = {
-        "model": "gpt-4o",
-        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_query}],
+        "model": "gpt-4o-mini",  # Tady stačí levnější mini model
+        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
         "temperature": 0
     }
 
@@ -117,14 +132,13 @@ def rewrite_query_for_search(user_query):
     return user_query
 
 
-def get_response_from_llm(context_list, query):
+def get_response_from_llm(context_list, query, history):
     context_text = ""
     for idx, item in enumerate(context_list):
         source_info = item.get('source', 'Neznámý soubor')
         title_info = item.get('title', 'Bez názvu')
         url_info = item.get('url', '')
 
-        # Důležité: Přidáváme jasný index zdroje pro LLM
         context_text += f"\n--- [ZDROJ_ID: {idx}] {title_info} (Soubor: {source_info}) ---\n"
         if url_info:
             context_text += f"Odkaz na zdroj: {url_info}\n"
@@ -132,25 +146,30 @@ def get_response_from_llm(context_list, query):
 
     system_prompt = """
     Jsi nápomocný AI asistent 'Sofim' pro Studijní oddělení FIM UHK. 
-    Odpovídej na otázky studentů POUZE na základě poskytnutého kontextu.
-    Pokud odpověď v kontextu není, slušně řekni, že tuto informaci nemáš.
+    Odpovídej na otázky studentů POUZE na základě poskytnutého kontextu z databáze a historie konverzace.
 
     MUSÍŠ odpovědět ve validním JSON formátu s následující strukturou:
     {
-      "odpoved": "Tvoje kompletní odpověď pro studenta formátovaná v Markdownu...",
-      "pouzite_zdroje": [0, 2] // Pole obsahující POUZE ID zdrojů (čísla), ze kterých jsi skutečně čerpal. Pokud nemáš info, vrať prázdné pole [].
+      "odpoved": "Tvoje odpověď formátovaná v Markdownu...",
+      "pouzite_zdroje": [0, 2] // Indexy zdrojů z aktuálního kontextu.
     }
     """
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Vložíme historii jako reálné zprávy pro LLM
+    for msg in history[-6:]:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+
+    messages.append(
+        {"role": "user", "content": f"Kontext z databáze:\n{context_text}\n\nAktuální dotaz studenta: {query}"})
 
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
     data = {
         "model": "gpt-4o",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Kontext:\n{context_text}\n\nDotaz studenta: {query}"}
-        ],
+        "messages": messages,
         "temperature": 0.3,
-        "response_format": {"type": "json_object"}  # Vynutí JSON výstup
+        "response_format": {"type": "json_object"}
     }
 
     try:
@@ -159,7 +178,6 @@ def get_response_from_llm(context_list, query):
             import json
             content = response.json()["choices"][0]["message"]["content"]
             try:
-                # Rozparsujeme JSON od GPT
                 parsed = json.loads(content)
                 return {
                     "text": parsed.get("odpoved", "Omlouvám se, ale nepodařilo se mi vygenerovat smysluplnou odpověď."),
@@ -179,27 +197,28 @@ def get_response_from_llm(context_list, query):
 def api_chat():
     data = request.get_json()
     user_query = data.get("query")
+    history = data.get("history", [])  # Nově taháme i historii
+
     if not user_query: return jsonify({"error": "Empty query"}), 400
 
-    search_query = rewrite_query_for_search(user_query)
+    # Přidáme historii do přepisovače
+    search_query = rewrite_query_for_search(user_query, history)
     query_embedding = get_query_embedding(search_query)
     embeddings = load_embeddings_from_db()
 
-    # Zvýšené K na 8 dokumentů
-    best_matches = find_top_k_matches(query_embedding, embeddings, user_query, k=8)
+    best_matches = find_top_k_matches(query_embedding, embeddings, search_query, k=8)
 
     response_sources = []
     response_text = ""
 
     if best_matches:
-        llm_result = get_response_from_llm(best_matches, user_query)
+        # Přidáme historii i do finálního generátoru
+        llm_result = get_response_from_llm(best_matches, user_query, history)
         response_text = llm_result["text"]
         used_indices = llm_result["used_indices"]
 
         seen = set()
-        # Projdeme jen ty indexy, které GPT vrátilo jako reálně použité
         for idx in used_indices:
-            # Kontrola, jestli si GPT nevymyslelo index mimo rozsah
             if isinstance(idx, int) and 0 <= idx < len(best_matches):
                 match = best_matches[idx]
                 src_name = match.get('title') or match.get('source', 'Zdroj')

@@ -231,6 +231,14 @@ body {
 }
 .source-item:hover::after { opacity: 1; visibility: visible; transform: translateX(-50%) scale(1); }
 
+.source-item[data-tooltip]::after {
+    white-space: normal !important; /* Dovolí zalamování textu */
+    max-width: 220px;               /* Omezí šířku bubliny, aby nebyla zbytečně dlouhá */
+    text-align: center;             /* Hezky to zarovná */
+    word-wrap: break-word;
+    z-index: 1000;                  /* Pro jistotu, aby to nevykreslilo pod něčím jiným */
+}
+
 /* --- VSTUPNÍ OBLAST --- */
 .chat-input-area {
     padding: 12px 15px;
