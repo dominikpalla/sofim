@@ -53,22 +53,25 @@
 
         // --- Funkce: Převod Markdown na HTML ---
         function parseMarkdown(text) {
-            if (!text) return "";
+    if (!text) return "";
 
-            // 1. Tučné písmo: **text** -> <strong>text</strong>
-            let formatted = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    // 1. Odkazy (včetně mailto): [text](url) -> <a href="url" target="_blank">text</a>
+    let formatted = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
 
-            // 2. Kurzíva: *text* -> <em>text</em>
-            formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    // 2. Tučné písmo: **text** -> <strong>text</strong>
+    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
 
-            // 3. Odrážky: "- text" -> "• text" (pro hezčí seznamy)
-            formatted = formatted.replace(/^- (.*)/gm, '• $1');
+    // 3. Kurzíva: *text* -> <em>text</em>
+    formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
 
-            // 4. Nové řádky: \n -> <br>
-            formatted = formatted.replace(/\n/g, '<br>');
+    // 4. Odrážky: "- text" -> "• text" (pro hezčí seznamy)
+    formatted = formatted.replace(/^- (.*)/gm, '• $1');
 
-            return formatted;
-        }
+    // 5. Nové řádky: \n -> <br>
+    formatted = formatted.replace(/\n/g, '<br>');
+
+    return formatted;
+}
 
         let chatHistory = [];
 
