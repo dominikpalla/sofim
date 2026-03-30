@@ -1,5 +1,5 @@
 import numpy as np
-from flask import Flask, request, render_template, jsonify, session, redirect, url_for
+from flask import Flask, request, render_template, jsonify, session, redirect, url_for, flash
 import requests
 import threading
 from database import load_embeddings_from_db, get_db_connection, get_sync_status
@@ -338,22 +338,23 @@ def admin_upload_csv():
         return redirect(url_for("admin_login"))
 
     if 'csv_file' not in request.files:
+        flash("Nebyl vybrán žádný soubor k nahrání.", "error")
         return redirect(url_for("admin_dashboard"))
 
     file = request.files['csv_file']
 
-    # Pokud uživatel neodeslal žádný soubor
     if file.filename == '':
+        flash("Nebyl vybrán žádný soubor k nahrání.", "error")
         return redirect(url_for("admin_dashboard"))
 
-    # Zkontrolujeme, že jde opravdu o CSV
     if file and file.filename.endswith('.csv'):
-        # Ujistíme se, že složka 'data' vůbec existuje
         os.makedirs('data', exist_ok=True)
-
-        # Uložíme soubor a natvrdo ho přejmenujeme na to, co čeká ingest.py
         save_path = os.path.join('data', 'predmety.csv')
         file.save(save_path)
+        # Zde jsme přidali úspěšnou hlášku!
+        flash("Paráda! Nové CSV s předměty bylo úspěšně nahráno. Nyní můžeš spustit aktualizaci tabulky.", "success")
+    else:
+        flash("Chyba: Prosím, nahraj pouze soubor ve formátu .csv.", "error")
 
     return redirect(url_for("admin_dashboard"))
 

@@ -50,6 +50,25 @@
 
 <div class="container">
 
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div style="grid-column: 1 / -1;">
+        {% for category, message in messages %}
+          <div style="padding: 15px; margin-bottom: 20px; border-radius: 8px; font-weight: bold; font-size: 15px;
+                      {% if category == 'success' %} background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb;
+                      {% else %} background-color: #fce8e6; color: #d93025; border: 1px solid #fad2cf; {% endif %}">
+            {% if category == 'success' %}
+                <i class="fas fa-check-circle" style="margin-right: 8px;"></i>
+            {% else %}
+                <i class="fas fa-exclamation-triangle" style="margin-right: 8px;"></i>
+            {% endif %}
+            {{ message }}
+          </div>
+        {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
     <div class="card">
         <h2><i class="fas fa-globe"></i> Zdroje webových dat</h2>
         <p>Zadejte URL adresy UHK stránek, které má Sofim znát.</p>
