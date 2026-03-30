@@ -108,12 +108,14 @@
                 </div>
                 <a href="/admin/trigger_sync/csv" class="btn btn-success sync-btn"><i class="fas fa-play"></i> Spustit tabulku</a>
             </div>
+
+            <form action="/admin/upload_csv" method="POST" enctype="multipart/form-data" style="margin-top: 15px; margin-bottom: 15px; display: flex; gap: 10px; align-items: center; background: #fff; padding: 10px; border-radius: 5px; border: 1px dashed #ccc;">
+                <input type="file" name="csv_file" accept=".csv" required style="flex: 1; font-size: 14px;">
+                <button type="submit" class="btn btn-primary" style="padding: 8px 15px; font-size: 14px;"><i class="fas fa-upload"></i> Nahrát na server</button>
+            </form>
             <div class="progress-container" id="progress-container-CSV">
                 <div class="progress-bar" id="progress-bar-CSV">0%</div>
             </div>
-            <div class="sync-info" id="detail-CSV" style="margin-top: 5px;"></div>
-            <div class="error-log" id="error-CSV"></div>
-        </div>
 
         <div style="text-align: center; margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
             <a href="/admin/trigger_sync/all" class="btn btn-warning sync-btn" style="width: 100%; font-size: 16px;">

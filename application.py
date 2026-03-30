@@ -6,6 +6,7 @@ from database import load_embeddings_from_db, get_db_connection, get_sync_status
 from ingest import run_ingest
 from config import OPENAI_API_KEY, EMBEDDING_MODEL, OPENAI_EMBEDDING_URL, LLM_API_URL
 import re
+import os
 
 app = Flask(__name__)
 
@@ -327,6 +328,33 @@ def admin_trigger_sync(mode):
         thread.start()
 
     # Hned se vrátíme na dashboard, kde se chytí AJAX a ukáže ti hezký progress
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/upload_csv", methods=["POST"])
+def admin_upload_csv():
+    """Zpracuje upload CSV souboru a uloží ho do složky data."""
+    if not session.get("logged_in"):
+        return redirect(url_for("admin_login"))
+
+    if 'csv_file' not in request.files:
+        return redirect(url_for("admin_dashboard"))
+
+    file = request.files['csv_file']
+
+    # Pokud uživatel neodeslal žádný soubor
+    if file.filename == '':
+        return redirect(url_for("admin_dashboard"))
+
+    # Zkontrolujeme, že jde opravdu o CSV
+    if file and file.filename.endswith('.csv'):
+        # Ujistíme se, že složka 'data' vůbec existuje
+        os.makedirs('data', exist_ok=True)
+
+        # Uložíme soubor a natvrdo ho přejmenujeme na to, co čeká ingest.py
+        save_path = os.path.join('data', 'predmety.csv')
+        file.save(save_path)
+
     return redirect(url_for("admin_dashboard"))
 
 
