@@ -56,30 +56,38 @@ def is_subject_code(word):
     return False
 
 
-def find_top_k_matches(query_embedding, embeddings, query_text, k=3):
-    """Najde K nejlepších shod s CHYTRÝM boostem pro kódy."""
+def find_top_k_matches(query_embedding, embeddings, query_text, k=8):
+    """Najde K nejlepších shod s CHYTRÝM boostem pro kódy i klíčová slova."""
     if not embeddings:
         return []
 
-    raw_tokens = re.findall(r'\b\w+\b', query_text)
+    # Očištění dotazu na jednotlivá smysluplná slova
+    raw_tokens = [t for t in re.findall(r'\b\w+\b', query_text) if len(t) > 3]
 
     scored_embeddings = []
     for item in embeddings:
         score = cosine_similarity(query_embedding, item["vector"])
         item_title = item["title"]
+        item_text = item["text"]
 
         boost = 0.0
         for token in raw_tokens:
+            # Menší boost pro shodu jmen nebo klíčových slov v textu/názvu
+            if token.lower() in item_title.lower() or token.lower() in item_text.lower():
+                boost += 0.05
+
+                # Tvůj původní masivní boost pro kódy předmětů
             if is_subject_code(token):
                 if re.search(r'\b' + re.escape(token) + r'\b', item_title, re.IGNORECASE):
-                    print(f"🚀 Boostuji: {item['title']} kvůli kódu '{token}'")
-                    boost += 0.5  # Masivní boost
+                    # print(f"🚀 Boostuji: {item['title']} kvůli kódu '{token}'")
+                    boost += 0.5
 
         final_score = score + boost
         scored_embeddings.append((final_score, item))
 
     scored_embeddings.sort(key=lambda x: x[0], reverse=True)
-    return [item for score, item in scored_embeddings[:k] if score > 0.2]
+    # Snížila jsem hranici na 0.15, protože při k=8 chceme pustit i širší kontext
+    return [item for score, item in scored_embeddings[:k] if score > 0.15]
 
 
 def rewrite_query_for_search(user_query):
@@ -116,16 +124,22 @@ def get_response_from_llm(context_list, query):
         title_info = item.get('title', 'Bez názvu')
         url_info = item.get('url', '')
 
-        context_text += f"\n--- ZDROJ {idx + 1}: {title_info} (Soubor: {source_info}) ---\n"
+        # Důležité: Přidáváme jasný index zdroje pro LLM
+        context_text += f"\n--- [ZDROJ_ID: {idx}] {title_info} (Soubor: {source_info}) ---\n"
         if url_info:
             context_text += f"Odkaz na zdroj: {url_info}\n"
-
         context_text += item['text'] + "\n"
 
     system_prompt = """
     Jsi nápomocný AI asistent 'Sofim' pro Studijní oddělení FIM UHK. 
     Odpovídej na otázky studentů POUZE na základě poskytnutého kontextu.
     Pokud odpověď v kontextu není, slušně řekni, že tuto informaci nemáš.
+
+    MUSÍŠ odpovědět ve validním JSON formátu s následující strukturou:
+    {
+      "odpoved": "Tvoje kompletní odpověď pro studenta formátovaná v Markdownu...",
+      "pouzite_zdroje": [0, 2] // Pole obsahující POUZE ID zdrojů (čísla), ze kterých jsi skutečně čerpal. Pokud nemáš info, vrať prázdné pole [].
+    }
     """
 
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
@@ -135,16 +149,28 @@ def get_response_from_llm(context_list, query):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Kontext:\n{context_text}\n\nDotaz studenta: {query}"}
         ],
-        "temperature": 0.3
+        "temperature": 0.3,
+        "response_format": {"type": "json_object"}  # Vynutí JSON výstup
     }
 
     try:
         response = requests.post(LLM_API_URL, headers=headers, json=data)
         if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"].strip()
-    except Exception:
-        return f"Chyba API (Status {response.status_code}): {response.text}"
-    return f"Chyba API (Status {response.status_code}): {response.text}"
+            import json
+            content = response.json()["choices"][0]["message"]["content"]
+            try:
+                # Rozparsujeme JSON od GPT
+                parsed = json.loads(content)
+                return {
+                    "text": parsed.get("odpoved", "Omlouvám se, ale nepodařilo se mi vygenerovat smysluplnou odpověď."),
+                    "used_indices": parsed.get("pouzite_zdroje", [])
+                }
+            except json.JSONDecodeError:
+                return {"text": content, "used_indices": []}
+    except Exception as e:
+        return {"text": f"Chyba API: {str(e)}", "used_indices": []}
+
+    return {"text": f"Chyba API (Status {response.status_code})", "used_indices": []}
 
 
 # --- Routes pro Chatbota ---
@@ -159,26 +185,32 @@ def api_chat():
     query_embedding = get_query_embedding(search_query)
     embeddings = load_embeddings_from_db()
 
-    best_matches = find_top_k_matches(query_embedding, embeddings, user_query, k=3)
+    # Zvýšené K na 8 dokumentů
+    best_matches = find_top_k_matches(query_embedding, embeddings, user_query, k=8)
 
     response_sources = []
     response_text = ""
 
     if best_matches:
-        response_text = get_response_from_llm(best_matches, user_query)
-        seen = set()
-        for match in best_matches:
-            # Vezmeme title, nebo source, a nově si držíme i URL
-            src_name = match.get('title') or match.get('source', 'Zdroj')
-            src_url = match.get('url', '')
+        llm_result = get_response_from_llm(best_matches, user_query)
+        response_text = llm_result["text"]
+        used_indices = llm_result["used_indices"]
 
-            # Abychom neopakovali stejný zdroj dvakrát pod stejným jménem
-            if src_name not in seen:
-                response_sources.append({
-                    "name": src_name,
-                    "url": src_url
-                })
-                seen.add(src_name)
+        seen = set()
+        # Projdeme jen ty indexy, které GPT vrátilo jako reálně použité
+        for idx in used_indices:
+            # Kontrola, jestli si GPT nevymyslelo index mimo rozsah
+            if isinstance(idx, int) and 0 <= idx < len(best_matches):
+                match = best_matches[idx]
+                src_name = match.get('title') or match.get('source', 'Zdroj')
+                src_url = match.get('url', '')
+
+                if src_name not in seen:
+                    response_sources.append({
+                        "name": src_name,
+                        "url": src_url
+                    })
+                    seen.add(src_name)
     else:
         response_text = "Bohužel k tomuto dotazu nemám v databázi žádné informace."
 
